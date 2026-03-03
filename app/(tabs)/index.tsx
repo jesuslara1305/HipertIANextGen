@@ -17,7 +17,6 @@ export default function TabOneScreen() {
   });
 
   useEffect(() => {
-    // ✅ Default global para TODO Text
     const TextRender = (Text as any).render;
     if (!TextRender) return;
 
@@ -31,7 +30,6 @@ export default function TabOneScreen() {
       };
     }
 
-    // ✅ Default global para TextInput también (opcional pero recomendado)
     const InputRender = (TextInput as any).render;
     if (InputRender && !(TextInput as any).__patched) {
       (TextInput as any).__patched = true;

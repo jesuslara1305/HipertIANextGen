@@ -11,81 +11,81 @@ import {
   View,
 } from "react-native";
 
-type Punto = { label: string; s: number; d: number };
+type Punto = { label: string; a: number; p: number };
+
 type Categoria = {
-  label: "Normal" | "Ligeramente elevada" | "Elevada" | "Alta" | "Muy alta";
+  label: "Normal" | "Ligeramente elevada" | "Elevada" | "Alta";
   bg: string;
   fg: string;
 };
 
-type Medicion = {
+type MedicionGlucosa = {
   id: string;
-  systolica: number;
-  diastolica: number;
+  ayuno: number; // mg/dL
+  postprandial: number; // mg/dL
   measured_at: string;
 };
 
-const MOCK_MEDICIONES: Medicion[] = [
+const MOCK_GLUCO: MedicionGlucosa[] = [
   {
-    id: "m1",
-    systolica: 120,
-    diastolica: 80,
-    measured_at: "2025-11-27T17:34:39.000Z",
+    id: "g1",
+    ayuno: 70,
+    postprandial: 120,
+    measured_at: new Date().toISOString(),
   },
   {
-    id: "m2",
-    systolica: 119,
-    diastolica: 78,
-    measured_at: "2025-11-27T10:09:30.000Z",
+    id: "g2",
+    ayuno: 78,
+    postprandial: 135,
+    measured_at: new Date(Date.now() - 86400000).toISOString(),
   },
   {
-    id: "m3",
-    systolica: 118,
-    diastolica: 79,
-    measured_at: "2025-11-26T02:15:38.000Z",
+    id: "g3",
+    ayuno: 85,
+    postprandial: 142,
+    measured_at: new Date(Date.now() - 2 * 86400000).toISOString(),
   },
   {
-    id: "m4",
-    systolica: 112,
-    diastolica: 79,
-    measured_at: "2025-11-26T02:14:55.000Z",
+    id: "g4",
+    ayuno: 92,
+    postprandial: 155,
+    measured_at: new Date(Date.now() - 3 * 86400000).toISOString(),
   },
   {
-    id: "m5",
-    systolica: 119,
-    diastolica: 79,
-    measured_at: "2025-11-26T00:23:31.000Z",
+    id: "g5",
+    ayuno: 76,
+    postprandial: 128,
+    measured_at: new Date(Date.now() - 4 * 86400000).toISOString(),
   },
   {
-    id: "m6",
-    systolica: 124,
-    diastolica: 79,
-    measured_at: "2025-11-25T22:10:10.000Z",
+    id: "g6",
+    ayuno: 88,
+    postprandial: 160,
+    measured_at: new Date(Date.now() - 5 * 86400000).toISOString(),
   },
   {
-    id: "m7",
-    systolica: 121,
-    diastolica: 77,
-    measured_at: "2025-11-25T08:10:10.000Z",
+    id: "g7",
+    ayuno: 96,
+    postprandial: 170,
+    measured_at: new Date(Date.now() - 6 * 86400000).toISOString(),
   },
   {
-    id: "m8",
-    systolica: 117,
-    diastolica: 76,
-    measured_at: "2025-11-24T10:10:10.000Z",
+    id: "g8",
+    ayuno: 82,
+    postprandial: 140,
+    measured_at: new Date(Date.now() - 7 * 86400000).toISOString(),
   },
 ];
 
-function getCategoria(s: number, d: number): Categoria {
-  if (s < 120 && d < 80)
-    return { label: "Normal", bg: "#DCFCE7", fg: "#166534" };
-  if (s >= 120 && s < 130 && d < 80)
-    return { label: "Ligeramente elevada", bg: "#E9F8D8", fg: "#3F6212" };
-  if ((s >= 130 && s < 140) || (d >= 80 && d < 90))
-    return { label: "Elevada", bg: "#FEF9C3", fg: "#92400E" };
-  if (s >= 140 || d >= 90)
-    return { label: "Alta", bg: "#FFEDD5", fg: "#9A3412" };
-  return { label: "Muy alta", bg: "#FEE2E2", fg: "#991B1B" };
+function getCategoriaGlucosa(ayunoAvg: number, postAvg: number): Categoria {
+  const worst = Math.max(
+    ayunoAvg >= 126 ? 3 : ayunoAvg >= 100 ? 2 : 1,
+    postAvg >= 200 ? 3 : postAvg >= 140 ? 2 : 1,
+  );
+
+  if (worst === 1) return { label: "Normal", bg: "#DCFCE7", fg: "#166534" };
+  if (worst === 2) return { label: "Elevada", bg: "#FEF9C3", fg: "#92400E" };
+  return { label: "Alta", bg: "#FFEDD5", fg: "#9A3412" };
 }
 
 function fmtHoyAyer(iso: string) {
@@ -101,19 +101,19 @@ function fmtHoyAyer(iso: string) {
   return d.toLocaleString();
 }
 
-const DualBarChart = ({
+const DualBarChartGlucosa = ({
   data,
   height = 200,
-  colorS = "#EF4444",
-  colorD = "#0EA5E9",
+  colorA = "#10B981",
+  colorP = "#F59E0B",
 }: {
   data: Punto[];
   height?: number;
-  colorS?: string;
-  colorD?: string;
+  colorA?: string;
+  colorP?: string;
 }) => {
   const max = useMemo(
-    () => Math.max(1, ...data.flatMap((d) => [d.s, d.d])),
+    () => Math.max(1, ...data.flatMap((d) => [d.a, d.p])),
     [data],
   );
   const TOP_PAD = 18;
@@ -132,8 +132,8 @@ const DualBarChart = ({
         paddingTop: TOP_PAD,
       }}
       renderItem={({ item: d }) => {
-        const hs = Math.max(8, (d.s / max) * areaHeight);
-        const hd = Math.max(8, (d.d / max) * areaHeight);
+        const ha = Math.max(8, (d.a / max) * areaHeight);
+        const hp = Math.max(8, (d.p / max) * areaHeight);
 
         return (
           <View style={[styles.groupSlot, { height }]}>
@@ -143,15 +143,15 @@ const DualBarChart = ({
                   style={[
                     styles.bar,
                     {
-                      height: hs,
-                      backgroundColor: colorS,
+                      height: ha,
+                      backgroundColor: colorA,
                       borderWidth: 1,
                       borderColor: "rgba(0,0,0,0.06)",
                     },
                   ]}
                 />
-                <Text style={[styles.valueOnBar, { bottom: hs + 2 }]}>
-                  {d.s}
+                <Text style={[styles.valueOnBar, { bottom: ha + 2 }]}>
+                  {d.a}
                 </Text>
               </View>
 
@@ -160,15 +160,15 @@ const DualBarChart = ({
                   style={[
                     styles.bar,
                     {
-                      height: hd,
-                      backgroundColor: colorD,
+                      height: hp,
+                      backgroundColor: colorP,
                       borderWidth: 1,
                       borderColor: "rgba(0,0,0,0.06)",
                     },
                   ]}
                 />
-                <Text style={[styles.valueOnBar, { bottom: hd + 2 }]}>
-                  {d.d}
+                <Text style={[styles.valueOnBar, { bottom: hp + 2 }]}>
+                  {d.p}
                 </Text>
               </View>
             </View>
@@ -183,18 +183,18 @@ const DualBarChart = ({
   );
 };
 
-/**
- * ✅ CONTENIDO REUTILIZABLE (SIN HEADER "Historial" y SIN ScrollView)
- * Esto es lo que vas a renderizar debajo de Lecturas Recientes.
- */
-export function HistorialContent({ embedded = true }: { embedded?: boolean }) {
+export function HistorialGlucosaContent({
+  embedded = true,
+}: {
+  embedded?: boolean;
+}) {
   const [loading, setLoading] = useState(true);
-  const [items, setItems] = useState<Medicion[]>([]);
+  const [items, setItems] = useState<MedicionGlucosa[]>([]);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => {
-      setItems(MOCK_MEDICIONES);
+      setItems(MOCK_GLUCO);
       setLoading(false);
     }, 400);
     return () => clearTimeout(t);
@@ -207,8 +207,8 @@ export function HistorialContent({ embedded = true }: { embedded?: boolean }) {
         .reverse()
         .map((m) => ({
           label: fmtHoyAyer(m.measured_at),
-          s: m.systolica,
-          d: m.diastolica,
+          a: m.ayuno,
+          p: m.postprandial,
         })),
     [items],
   );
@@ -216,14 +216,14 @@ export function HistorialContent({ embedded = true }: { embedded?: boolean }) {
   const resumen7 = useMemo(() => {
     if (items.length === 0) return null;
     const ult7 = items.slice(0, 7);
-    const sAvg = Math.round(
-      ult7.reduce((a, m) => a + m.systolica, 0) / ult7.length,
+    const aAvg = Math.round(
+      ult7.reduce((acc, m) => acc + m.ayuno, 0) / ult7.length,
     );
-    const dAvg = Math.round(
-      ult7.reduce((a, m) => a + m.diastolica, 0) / ult7.length,
+    const pAvg = Math.round(
+      ult7.reduce((acc, m) => acc + m.postprandial, 0) / ult7.length,
     );
-    const cat = getCategoria(sAvg, dAvg);
-    return { sAvg, dAvg, cat, count: ult7.length };
+    const cat = getCategoriaGlucosa(aAvg, pAvg);
+    return { aAvg, pAvg, cat, count: ult7.length };
   }, [items]);
 
   const onDelete = (id: string) => {
@@ -247,29 +247,35 @@ export function HistorialContent({ embedded = true }: { embedded?: boolean }) {
     );
   };
 
-  const renderMedicion = ({ item }: { item: Medicion }) => {
-    const cat = getCategoria(item.systolica, item.diastolica);
-    const id = item.id;
-    const isDeleting = deletingId === id;
+  const renderMedicion = ({ item }: { item: MedicionGlucosa }) => {
+    const isDeleting = deletingId === item.id;
 
     return (
       <View style={styles.itemRow}>
         <View style={{ flex: 1 }}>
           <Text style={styles.measure}>
-            {item.systolica}/{item.diastolica} mmHg
+            {item.ayuno}/{item.postprandial} mg/dL
           </Text>
+          <Text style={styles.subMeasure}>Ayuno / Postprandial</Text>
           <Text style={styles.date}>{fmtHoyAyer(item.measured_at)}</Text>
         </View>
 
-        <View
-          style={[styles.badge, { backgroundColor: cat.bg, marginRight: 8 }]}
-        >
-          <Text style={[styles.badgeText, { color: cat.fg }]}>{cat.label}</Text>
-        </View>
+        {resumen7 ? (
+          <View
+            style={[
+              styles.badge,
+              { backgroundColor: resumen7.cat.bg, marginRight: 8 },
+            ]}
+          >
+            <Text style={[styles.badgeText, { color: resumen7.cat.fg }]}>
+              {resumen7.cat.label}
+            </Text>
+          </View>
+        ) : null}
 
         <TouchableOpacity
           style={styles.deleteBtn}
-          onPress={() => onDelete(id)}
+          onPress={() => onDelete(item.id)}
           disabled={isDeleting}
         >
           {isDeleting ? (
@@ -288,8 +294,6 @@ export function HistorialContent({ embedded = true }: { embedded?: boolean }) {
 
   return (
     <View style={embedded ? { backgroundColor: "#f7f7f7" } : styles.screen}>
-      {/* ⛔️ QUITAMOS EL HEADER "Historial" */}
-
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>
           Promedio (últimas {resumen7?.count ?? 0})
@@ -299,9 +303,13 @@ export function HistorialContent({ embedded = true }: { embedded?: boolean }) {
           <Text style={styles.empty}>Cargando...</Text>
         ) : resumen7 ? (
           <View style={styles.avgRow}>
-            <Text style={styles.avgValue}>
-              {resumen7.sAvg}/{resumen7.dAvg} mmHg
-            </Text>
+            <View>
+              <Text style={styles.avgValue}>
+                {resumen7.aAvg}/{resumen7.pAvg} mg/dL
+              </Text>
+              <Text style={styles.avgHint}>Ayuno / Postprandial</Text>
+            </View>
+
             <View style={[styles.badge, { backgroundColor: resumen7.cat.bg }]}>
               <Text style={[styles.badgeText, { color: resumen7.cat.fg }]}>
                 {resumen7.cat.label}
@@ -315,17 +323,18 @@ export function HistorialContent({ embedded = true }: { embedded?: boolean }) {
 
       <View style={styles.card}>
         <View style={styles.legendRow}>
-          <Text style={styles.sectionTitle}>Sistólica vs. Diastólica</Text>
+          <Text style={styles.sectionTitle}>Ayuno vs. Postprandial</Text>
           <View style={styles.legend}>
-            <View style={[styles.legendDot, { backgroundColor: "#EF4444" }]} />
-            <Text style={styles.legendText}>Sistólica</Text>
+            <View style={[styles.legendDot, { backgroundColor: "#10B981" }]} />
+            <Text style={styles.legendText}>Ayuno</Text>
+
             <View
               style={[
                 styles.legendDot,
-                { backgroundColor: "#0EA5E9", marginLeft: 12 },
+                { backgroundColor: "#F59E0B", marginLeft: 12 },
               ]}
             />
-            <Text style={styles.legendText}>Diastólica</Text>
+            <Text style={styles.legendText}>Post</Text>
           </View>
         </View>
 
@@ -339,13 +348,14 @@ export function HistorialContent({ embedded = true }: { embedded?: boolean }) {
             contentContainerStyle={{ paddingTop: 10, paddingBottom: 6 }}
             showsVerticalScrollIndicator={false}
           >
-            <DualBarChart data={dualData} height={220} />
+            <DualBarChartGlucosa data={dualData} height={220} />
           </ScrollView>
         )}
       </View>
 
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Mediciones</Text>
+
         {loading ? (
           <Text style={styles.empty}>Cargando...</Text>
         ) : items.length === 0 ? (
@@ -369,7 +379,10 @@ export function HistorialContent({ embedded = true }: { embedded?: boolean }) {
   );
 }
 
-export default function HistorialScreen() {
+/**
+ * ✅ Pantalla standalone (por si luego la quieres como tab)
+ */
+export default function HistorialGlucosaScreen() {
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: "#f7f7f7" }}
@@ -378,13 +391,14 @@ export default function HistorialScreen() {
     >
       <View style={styles.screen}>
         <Text style={styles.header}>Historial</Text>
-        <HistorialContent embedded={false} />
+        <HistorialGlucosaContent embedded={false} />
       </View>
     </ScrollView>
   );
 }
 
 const BAR_WIDTH = 18;
+
 const styles = StyleSheet.create({
   screen: { padding: 16, backgroundColor: "#f7f7f7" },
   header: { fontSize: 22, fontWeight: "700", marginBottom: 12 },
@@ -406,6 +420,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   avgValue: { fontSize: 20, fontWeight: "700" },
+  avgHint: { fontSize: 12, color: "#666", marginTop: 4 },
 
   legendRow: {
     flexDirection: "row",
@@ -442,9 +457,12 @@ const styles = StyleSheet.create({
     borderTopColor: "#eee",
   },
   measure: { fontSize: 16, fontWeight: "600" },
-  date: { fontSize: 12, color: "#666", marginTop: 2 },
+  subMeasure: { fontSize: 12, color: "#666", marginTop: 2 },
+  date: { fontSize: 12, color: "#666", marginTop: 6 },
+
   badge: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14 },
   badgeText: { fontSize: 12, fontWeight: "700" },
+
   deleteBtn: {
     padding: 6,
     borderRadius: 8,

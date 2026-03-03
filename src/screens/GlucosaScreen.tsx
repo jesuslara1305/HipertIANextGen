@@ -1,16 +1,10 @@
 import { useNavigation } from "@react-navigation/native";
 import React, { useMemo } from "react";
-import {
-    Image,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
-} from "react-native";
+import { Image, ScrollView, StyleSheet, Text, View } from "react-native";
 import pancreasFeliz from "../assets/imagenes/pancreas_feliz.png";
 import pancreasSerio from "../assets/imagenes/pancreas_serio.png";
 import pancreasTriste from "../assets/imagenes/pancreas_tite.png";
+import { HistorialGlucosaContent } from "./HistorialGlucosaScreen";
 
 function fmtHoyAyer(iso: string) {
   const d = new Date(iso);
@@ -141,14 +135,6 @@ export default function GlucosaScreen() {
         </View>
       </View>
 
-      <TouchableOpacity
-        activeOpacity={0.9}
-        style={styles.primaryBtn}
-        onPress={() => navigation.navigate("RegistroGlucosaManual")}
-      >
-        <Text style={styles.primaryBtnText}>Registrar glucosa</Text>
-      </TouchableOpacity>
-
       <Text style={styles.sectionTitle}>Lecturas Recientes</Text>
 
       {lecturas.map((m) => (
@@ -165,6 +151,22 @@ export default function GlucosaScreen() {
           {m.nota ? <Text style={styles.recentNote}>{m.nota}</Text> : null}
         </View>
       ))}
+      {lecturas.map((m) => (
+        <View key={m.id} style={styles.recentCard}>
+          <Text style={styles.recentValue}>{m.mgdl} mg/dL</Text>
+          <Text style={styles.recentDate}>{fmtHoyAyer(m.measured_at)}</Text>
+
+          <View style={{ flex: 1 }} />
+
+          <Text style={styles.recentHintRight}>últimos 7 días</Text>
+
+          <View style={{ height: 26 }} />
+
+          {m.nota ? <Text style={styles.recentNote}>{m.nota}</Text> : null}
+        </View>
+      ))}
+
+      <HistorialGlucosaContent />
     </ScrollView>
   );
 }

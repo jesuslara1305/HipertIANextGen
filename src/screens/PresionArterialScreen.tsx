@@ -1,13 +1,14 @@
 import { useNavigation } from "@react-navigation/native";
 import React, { useMemo, useState } from "react";
 import {
-    Image,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Image,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
+import { HistorialContent } from "../screens/HistorialScreen";
 
 import caraFeliz from "../assets/imagenes/feliz.png";
 import caraNeutro from "../assets/imagenes/neutro.png";
@@ -155,13 +156,6 @@ export default function PresionArterialScreen() {
         </View>
       </TouchableOpacity>
 
-      <TouchableOpacity
-        activeOpacity={0.9}
-        style={styles.primaryBtn}
-        onPress={() => navigation.navigate("RegistroPresionManual")}
-      >
-        <Text style={styles.primaryBtnText}>Registrar presión</Text>
-      </TouchableOpacity>
       <View style={styles.card}>
         <Text style={styles.title}>Lecturas Recientes</Text>
 
@@ -174,6 +168,21 @@ export default function PresionArterialScreen() {
           </View>
         ))}
       </View>
+      <View style={styles.card}>
+        <Text style={styles.title}>Lecturas Recientes</Text>
+
+        {ultimas.map((m) => (
+          <View key={m.id} style={styles.recentRow}>
+            <Text style={styles.reading}>
+              {m.systolica}/{m.diastolica} mmHg
+            </Text>
+            <Text style={styles.readingTime}>{fmtHoyAyer(m.measured_at)}</Text>
+          </View>
+        ))}
+      </View>
+
+      {/* ✅ HISTORIAL DEBAJO */}
+      <HistorialContent />
     </ScrollView>
   );
 }

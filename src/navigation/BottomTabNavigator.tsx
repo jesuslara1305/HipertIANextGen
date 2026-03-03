@@ -3,15 +3,13 @@ import React from "react";
 import { Image, StyleSheet, TouchableOpacity } from "react-native";
 
 import InicioStack from "../navigation/InicioStack";
+import MedicionStack from "../navigation/MedicionStack";
 import AjustesScreen from "../screens/AjustesScreen";
 import ChatScreen from "../screens/ChatScreen";
-import HistorialScreen from "../screens/HistorialScreen";
-import MedicionScreen from "../screens/MedicionScreen";
 
 import iconAjustes from "../assets/imagenes/ajustes.png";
 import iconBauma from "../assets/imagenes/baumanometro.png";
 import iconChat from "../assets/imagenes/chat.png";
-import iconHistorial from "../assets/imagenes/historial.png";
 import iconInicio from "../assets/imagenes/inicio.png";
 
 const iconShare = require("../assets/iconos/share.png");
@@ -76,13 +74,14 @@ export default function BottomTabNavigator() {
       />
 
       <Tab.Screen
-        name="Historial"
-        component={HistorialScreen}
+        name="Medicion"
+        component={MedicionStack}
         options={{
-          title: "Historial",
+          title: "Medición",
+          headerShown: false,
           tabBarIcon: ({ color }) => (
             <Image
-              source={iconHistorial}
+              source={iconBauma}
               style={{ width: 24, height: 24, tintColor: color }}
               resizeMode="contain"
             />
@@ -100,15 +99,6 @@ export default function BottomTabNavigator() {
               />
             </TouchableOpacity>
           ),
-        }}
-      />
-
-      <Tab.Screen
-        name="Medicion"
-        component={MedicionScreen}
-        options={{
-          title: "Medición",
-          tabBarButton: (props) => <BotonFlotante {...props} />,
         }}
       />
 
