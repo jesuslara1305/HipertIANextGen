@@ -1,16 +1,18 @@
 import { DateTimePickerAndroid } from "@react-native-community/datetimepicker";
 import React, { useEffect, useMemo, useState } from "react";
 import {
-    Alert,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
+import { useAuth } from "../../providers/AuthProvider";
+import { supabase } from "../services/supabase";
 
-type Sex = "male" | "female" | "other";
+type Sex = "male" | "female" | "prefer_not_to_say";
 type Smoking = "never" | "former" | "current";
 type Alcohol = "none" | "occasional" | "frequent";
 type Arm = "left" | "right" | "either";
@@ -52,6 +54,7 @@ function calcBMI(h?: number | null, w?: number | null) {
   const v = w / (m * m);
   return Math.round(v * 10) / 10;
 }
+
 function bmiTag(bmi: number) {
   if (bmi < 18.5) return { label: "Bajo peso", color: "#FFA000" };
   if (bmi < 25) return { label: "Normal", color: "#4CAF50" };
@@ -67,11 +70,15 @@ const fmtDob = (d: Date) =>
   });
 
 export default function MiPerfilScreen() {
+  const { session } = useAuth();
+
+  const [loading, setLoading] = useState(true);
+
   const [firstName, setFirstName] = useState("");
   const [lastP, setLastP] = useState("");
   const [lastM, setLastM] = useState("");
   const [dob, setDob] = useState<Date | null>(null);
-  const [sex, setSex] = useState<Sex>("other");
+  const [sex, setSex] = useState<Sex>("prefer_not_to_say");
 
   const [height, setHeight] = useState<string>("");
   const [weight, setWeight] = useState<string>("");
@@ -104,6 +111,108 @@ export default function MiPerfilScreen() {
   );
   const bmiInfo = bmi ? bmiTag(bmi) : null;
 
+  useEffect(() => {
+    const loadProfile = async () => {
+      if (!session?.user?.id) {
+        setLoading(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", session.user.id)
+        .maybeSingle();
+
+      if (error) {
+        Alert.alert("Error", "No se pudo cargar tu perfil.");
+        setLoading(false);
+        return;
+      }
+
+      if (data) {
+        setFirstName(data.first_name ?? "");
+        setLastP(data.last_name_paterno ?? "");
+        setLastM(data.last_name_materno ?? "");
+
+        setDob(data.dob ? new Date(`${data.dob}T00:00:00`) : null);
+
+        const sexValue =
+          data.sex_at_birth === "male" ||
+          data.sex_at_birth === "female" ||
+          data.sex_at_birth === "prefer_not_to_say"
+            ? data.sex_at_birth
+            : "prefer_not_to_say";
+        setSex(sexValue);
+
+        setHeight(
+          data.height_cm !== null && data.height_cm !== undefined
+            ? String(data.height_cm)
+            : "",
+        );
+        setWeight(
+          data.weight_kg !== null && data.weight_kg !== undefined
+            ? String(data.weight_kg)
+            : "",
+        );
+
+        const health = data.health ?? {};
+        setHta(typeof health.hta_dx === "boolean" ? health.hta_dx : null);
+        setHtaYear(
+          health.hta_dx_year !== null && health.hta_dx_year !== undefined
+            ? String(health.hta_dx_year)
+            : "",
+        );
+        setComorbids(
+          Array.isArray(health.comorbidities) ? health.comorbidities : [],
+        );
+        setMeds(health.medications ?? "");
+        setSmoking(
+          health.smoking_status === "former" ||
+            health.smoking_status === "current"
+            ? health.smoking_status
+            : "never",
+        );
+        setAlcohol(
+          health.alcohol_use === "occasional" ||
+            health.alcohol_use === "frequent"
+            ? health.alcohol_use
+            : "none",
+        );
+        setFamilyHTA(
+          typeof health.family_history_hta === "boolean"
+            ? health.family_history_hta
+            : null,
+        );
+        setPmh(
+          Array.isArray(health.personal_history) ? health.personal_history : [],
+        );
+
+        const measurement = data.measurement ?? {};
+        setPreferredArm(
+          measurement.preferred_arm === "left" ||
+            measurement.preferred_arm === "right"
+            ? measurement.preferred_arm
+            : "either",
+        );
+        setArmCirc(
+          measurement.arm_circumference_cm !== null &&
+            measurement.arm_circumference_cm !== undefined
+            ? String(measurement.arm_circumference_cm)
+            : "",
+        );
+        setRemindersOn(Boolean(measurement.reminders_enabled));
+        setRTimes(
+          Array.isArray(measurement.reminders) ? measurement.reminders : [],
+        );
+      }
+
+      setLoading(false);
+    };
+
+    loadProfile();
+  }, [session?.user?.id]);
+
   const pickDob = () => {
     DateTimePickerAndroid.open({
       value: dob ?? new Date(),
@@ -117,7 +226,9 @@ export default function MiPerfilScreen() {
   const toggle = (arr: string[], val: string) =>
     arr.includes(val) ? arr.filter((x) => x !== val) : [...arr, val];
 
-  const saveDatos = () => {
+  const saveDatos = async () => {
+    if (!session?.user?.id) return;
+
     if (!firstName.trim() || !lastP.trim() || !dob) {
       Alert.alert(
         "Datos incompletos",
@@ -125,18 +236,56 @@ export default function MiPerfilScreen() {
       );
       return;
     }
-    Alert.alert("Listo", "Datos personales guardados (mock).");
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({
+        first_name: firstName.trim(),
+        last_name_paterno: lastP.trim(),
+        last_name_materno: lastM.trim() || null,
+        dob: dob.toISOString().slice(0, 10),
+        sex_at_birth: sex,
+      })
+      .eq("id", session.user.id);
+
+    if (error) {
+      Alert.alert("Error", "No se pudieron guardar los datos personales.");
+      return;
+    }
+
+    Alert.alert("Listo", "Datos personales guardados.");
   };
 
-  const saveMedidas = () => {
+  const saveMedidas = async () => {
+    if (!session?.user?.id) return;
+
     if (!hNum || !wNum) {
       Alert.alert("Datos inválidos", "Indica estatura y peso válidos.");
       return;
     }
-    Alert.alert("Listo", "Medidas guardadas (mock).");
+
+    const bmiValue = calcBMI(hNum, wNum);
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({
+        height_cm: hNum,
+        weight_kg: wNum,
+        bmi: bmiValue,
+      })
+      .eq("id", session.user.id);
+
+    if (error) {
+      Alert.alert("Error", "No se pudieron guardar las medidas.");
+      return;
+    }
+
+    Alert.alert("Listo", "Medidas guardadas.");
   };
 
-  const saveSalud = () => {
+  const saveSalud = async () => {
+    if (!session?.user?.id) return;
+
     if (hta === null || familyHTA === null) {
       Alert.alert(
         "Faltan campos",
@@ -144,31 +293,83 @@ export default function MiPerfilScreen() {
       );
       return;
     }
-    Alert.alert("Listo", "Información de salud guardada (mock).");
+
+    const health = {
+      hta_dx: hta,
+      hta_dx_year: htaYear ? Number(htaYear) : null,
+      comorbidities: comorbids,
+      medications: meds.trim() || null,
+      smoking_status: smoking,
+      alcohol_use: alcohol,
+      family_history_hta: familyHTA,
+      personal_history: pmh,
+    };
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({ health })
+      .eq("id", session.user.id);
+
+    if (error) {
+      Alert.alert("Error", "No se pudo guardar la información de salud.");
+      return;
+    }
+
+    Alert.alert("Listo", "Información de salud guardada.");
   };
 
-  const saveMedicion = () => {
+  const saveMedicion = async () => {
+    if (!session?.user?.id) return;
+
+    let cleanTimes: string[] = [];
+
     if (remindersOn) {
-      const clean = rTimes
+      cleanTimes = rTimes
         .map((x) => x.trim())
         .filter(Boolean)
         .filter((x) => /^\d{2}:\d{2}$/.test(x));
-      if (clean.length === 0) {
+
+      if (cleanTimes.length === 0) {
         Alert.alert(
           "Horas inválidas",
           'Escribe al menos una hora válida. Ej: "08:00,20:00"',
         );
         return;
       }
-      setRTimes(clean);
     }
-    Alert.alert("Listo", "Preferencias de medición guardadas (mock).");
+
+    const armCircNum = armCirc
+      ? Number(String(armCirc).replace(",", "."))
+      : null;
+
+    const measurement = {
+      preferred_arm: preferredArm,
+      arm_circumference_cm: armCircNum,
+      reminders_enabled: remindersOn,
+      reminders: remindersOn ? cleanTimes : [],
+    };
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({ measurement })
+      .eq("id", session.user.id);
+
+    if (error) {
+      Alert.alert("Error", "No se pudo guardar la información de medición.");
+      return;
+    }
+
+    setRTimes(cleanTimes);
+    Alert.alert("Listo", "Preferencias de medición guardadas.");
   };
 
-  useEffect(() => {
-    // valores mock opcionales (puedes borrar si no quieres)
-    // setFirstName("Em");
-  }, []);
+  if (loading) {
+    return (
+      <View style={styles.loadingBox}>
+        <Text style={styles.loadingText}>Cargando perfil...</Text>
+      </View>
+    );
+  }
 
   return (
     <ScrollView
@@ -216,8 +417,8 @@ export default function MiPerfilScreen() {
           />
           <Chip
             text="Otro"
-            active={sex === "other"}
-            onPress={() => setSex("other")}
+            active={sex === "prefer_not_to_say"}
+            onPress={() => setSex("prefer_not_to_say")}
           />
         </View>
 
@@ -471,6 +672,14 @@ export default function MiPerfilScreen() {
 
 const styles = StyleSheet.create({
   container: { padding: 16, backgroundColor: "#f7f7f7" },
+
+  loadingBox: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#f7f7f7",
+  },
+  loadingText: { fontSize: 16, color: "#666" },
 
   card: {
     backgroundColor: "#fff",

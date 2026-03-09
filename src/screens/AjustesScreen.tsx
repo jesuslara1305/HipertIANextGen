@@ -9,11 +9,14 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { useAuth } from "../../providers/AuthProvider";
 
 export default function AjustesScreen() {
   const navigation = useNavigation<any>();
+  const { session, signOut } = useAuth();
 
-  const email = "amantesdelcodigo26@gmail.com";
+  const email = session?.user?.email ?? "usuario@correo.com";
+
   const firstInitial = useMemo(
     () => email.trim().charAt(0).toUpperCase() || "U",
     [email],
@@ -31,7 +34,9 @@ export default function AjustesScreen() {
     ]);
   };
 
-  const onCerrarSesion = () => {
+  const onCerrarSesion = async () => {
+    await signOut();
+
     navigation.reset({
       index: 0,
       routes: [{ name: "LoginScreen" }],
@@ -102,7 +107,7 @@ export default function AjustesScreen() {
         <Text style={styles.logoutTexto}>Cerrar sesión</Text>
       </TouchableOpacity>
 
-      <Text style={styles.version}>V 1.0.1</Text>
+      <Text style={styles.version}>V 1.0.2</Text>
     </ScrollView>
   );
 }
