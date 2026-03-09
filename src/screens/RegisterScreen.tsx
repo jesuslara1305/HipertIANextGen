@@ -2,13 +2,14 @@ import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import React, { useState } from "react";
 import {
-    Alert,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
+import { useAuth } from "../../providers/AuthProvider";
 import { RootStackParamList } from "../navigation/RootStack";
 
 type NavigationProp = NativeStackNavigationProp<
@@ -18,12 +19,13 @@ type NavigationProp = NativeStackNavigationProp<
 
 export default function RegisterScreen() {
   const navigation = useNavigation<NavigationProp>();
+  const { signUp, loading } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
-  const handleRegister = () => {
-    const e = email.trim();
+  const handleRegister = async () => {
+    const e = email.trim().toLowerCase();
 
     if (!e || !password || !confirmPassword) {
       Alert.alert("Campos requeridos", "Completa correo y contraseñas");
@@ -40,12 +42,37 @@ export default function RegisterScreen() {
       return;
     }
 
-    Alert.alert("Cuenta creada", "Registro en construcción.", [
-      {
-        text: "OK",
-        onPress: () => navigation.replace("LoginScreen"),
-      },
-    ]);
+    const err = await signUp(e, password);
+
+    if (err && err !== "CONFIRM_REQUIRED") {
+      Alert.alert("Error de registro", String(err));
+      return;
+    }
+
+    if (err === "CONFIRM_REQUIRED") {
+      Alert.alert(
+        "Revisa tu correo",
+        "Tu cuenta fue creada. Te enviamos un correo informativo. Usa el correo y la contraseña que acabas de registrar para iniciar sesión.",
+        [
+          {
+            text: "OK",
+            onPress: () => navigation.replace("LoginScreen"),
+          },
+        ],
+      );
+      return;
+    }
+
+    Alert.alert(
+      "Cuenta creada",
+      "Tu cuenta fue registrada correctamente. Ya puedes iniciar sesión con el correo y la contraseña que acabas de crear.",
+      [
+        {
+          text: "OK",
+          onPress: () => navigation.replace("LoginScreen"),
+        },
+      ],
+    );
   };
 
   return (
@@ -61,6 +88,7 @@ export default function RegisterScreen() {
         keyboardType="email-address"
         autoCapitalize="none"
         returnKeyType="next"
+        editable={!loading}
       />
 
       <TextInput
@@ -71,6 +99,7 @@ export default function RegisterScreen() {
         onChangeText={setPassword}
         secureTextEntry
         returnKeyType="next"
+        editable={!loading}
       />
 
       <TextInput
@@ -82,19 +111,24 @@ export default function RegisterScreen() {
         secureTextEntry
         returnKeyType="done"
         onSubmitEditing={handleRegister}
+        editable={!loading}
       />
 
       <TouchableOpacity
         activeOpacity={0.9}
         style={styles.registerButton}
         onPress={handleRegister}
+        disabled={loading}
       >
-        <Text style={styles.registerButtonText}>Continuar</Text>
+        <Text style={styles.registerButtonText}>
+          {loading ? "Registrando..." : "Continuar"}
+        </Text>
       </TouchableOpacity>
 
       <TouchableOpacity
         activeOpacity={0.9}
         onPress={() => navigation.replace("LoginScreen")}
+        disabled={loading}
       >
         <Text style={styles.backText}>¿Ya tienes cuenta? Inicia sesión</Text>
       </TouchableOpacity>
