@@ -31,7 +31,7 @@ export default function ChatScreen() {
 
     try {
       const response = await fetch(
-        "https://healthmed-api-nlp.onrender.com/preguntar",
+        "https://chatbot-bp.onrender.com/preguntar",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
