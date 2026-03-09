@@ -1,9 +1,18 @@
-import { useNavigation } from "@react-navigation/native";
-import React, { useMemo } from "react";
-import { Image, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
+import React, { useCallback, useMemo, useState } from "react";
+import {
+  ActivityIndicator,
+  Image,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import { useAuth } from "../../providers/AuthProvider";
 import pancreasFeliz from "../assets/imagenes/pancreas_feliz.png";
 import pancreasSerio from "../assets/imagenes/pancreas_serio.png";
 import pancreasTriste from "../assets/imagenes/pancreas_tite.png";
+import { supabase } from "../services/supabase";
 import { HistorialGlucosaContent } from "./HistorialGlucosaScreen";
 
 function fmtHoyAyer(iso: string) {
@@ -21,65 +30,203 @@ function fmtHoyAyer(iso: string) {
   return d.toLocaleString();
 }
 
-type LecturaGlucosa = {
+export type MedicionGlucosa = {
   id: string;
-  mgdl: number;
+  ayunas: number | null;
+  postprandial: number | null;
   measured_at: string;
-  nota?: string;
 };
+
+export type CategoriaGlucosa = {
+  label: "Normal" | "Ligeramente elevada" | "Elevada" | "Alta";
+  bg: string;
+  fg: string;
+};
+
+export function getCategoriaGlucosa(
+  ayunoAvg: number,
+  postAvg: number,
+): CategoriaGlucosa {
+  const ayunoLevel =
+    ayunoAvg >= 126 ? 4 : ayunoAvg >= 100 ? 3 : ayunoAvg >= 70 ? 1 : 2;
+  const postLevel =
+    postAvg >= 200 ? 4 : postAvg >= 140 ? 3 : postAvg >= 70 ? 1 : 2;
+
+  const worst = Math.max(ayunoLevel, postLevel);
+
+  if (worst === 1) return { label: "Normal", bg: "#DCFCE7", fg: "#166534" };
+  if (worst === 2)
+    return { label: "Ligeramente elevada", bg: "#E9F8D8", fg: "#3F6212" };
+  if (worst === 3) return { label: "Elevada", bg: "#FEF9C3", fg: "#92400E" };
+  return { label: "Alta", bg: "#FFEDD5", fg: "#9A3412" };
+}
+
+function getTrendInfo(ayunoAvg: number, postAvg: number) {
+  const cat = getCategoriaGlucosa(ayunoAvg, postAvg);
+
+  if (cat.label === "Normal") return { text: "Bien", color: "#16A34A" };
+  if (cat.label === "Ligeramente elevada")
+    return { text: "Estable", color: "#CA8A04" };
+  if (cat.label === "Elevada") return { text: "Atención", color: "#D97706" };
+  return { text: "Alta", color: "#DC2626" };
+}
+
+function getScoreGlucosa(ayunoAvg: number, postAvg: number) {
+  const cat = getCategoriaGlucosa(ayunoAvg, postAvg);
+
+  if (cat.label === "Normal") return 100;
+  if (cat.label === "Ligeramente elevada") return 85;
+  if (cat.label === "Elevada") return 70;
+  return 40;
+}
+
+function getNota(item: MedicionGlucosa) {
+  if (item.ayunas !== null && item.postprandial !== null) {
+    return "Ayuno / Postprandial";
+  }
+  if (item.ayunas !== null) {
+    return "Antes de comer";
+  }
+  if (item.postprandial !== null) {
+    return "Dos horas después de comer";
+  }
+  return "";
+}
+
+function getValorPrincipal(item: MedicionGlucosa) {
+  if (item.ayunas !== null && item.postprandial !== null) {
+    return `${item.ayunas}/${item.postprandial} mg/dL`;
+  }
+  if (item.ayunas !== null) {
+    return `${item.ayunas} mg/dL`;
+  }
+  if (item.postprandial !== null) {
+    return `${item.postprandial} mg/dL`;
+  }
+  return "--";
+}
 
 export default function GlucosaScreen() {
   const navigation = useNavigation<any>();
+  const { session } = useAuth();
 
-  const lecturas: LecturaGlucosa[] = [
-    {
-      id: "g1",
-      mgdl: 70,
-      measured_at: new Date().toISOString(),
-      nota: "Antes de comer",
-    },
-    {
-      id: "g2",
-      mgdl: 120,
-      measured_at: new Date(Date.now() - 86400000).toISOString(),
-      nota: "Dos horas después de comer",
-    },
-    {
-      id: "g3",
-      mgdl: 65,
-      measured_at: new Date(Date.now() - 2 * 86400000).toISOString(),
-      nota: "Dos horas después de comer",
-    },
-  ];
+  const [loading, setLoading] = useState(true);
+  const [lecturas, setLecturas] = useState<MedicionGlucosa[]>([]);
 
-  const evaluacion = useMemo(() => {
-    if (lecturas.length === 0) {
-      return { estado: "serio" as const, score: 50, color: "#FFC107", avg: 0 };
+  const loadLecturas = useCallback(async () => {
+    if (!session?.user?.id) {
+      setLecturas([]);
+      setLoading(false);
+      return;
     }
 
-    const avg = Math.round(
-      lecturas.reduce((acc, l) => acc + l.mgdl, 0) / lecturas.length,
-    );
+    setLoading(true);
 
-    if (avg < 100) {
-      return { estado: "feliz" as const, score: 100, color: "#4CAF50", avg };
+    const { data, error } = await supabase
+      .from("glucose_measurements")
+      .select("id, ayunas, postprandial, measured_at")
+      .eq("user_id", session.user.id)
+      .order("measured_at", { ascending: false });
+
+    if (error) {
+      console.log("glucose_measurements load error:", error.message);
+      setLecturas([]);
+      setLoading(false);
+      return;
     }
 
-    if (avg <= 140) {
-      return { estado: "serio" as const, score: 75, color: "#FFC107", avg };
-    }
+    const safeData: MedicionGlucosa[] = (data ?? []).map((m: any) => ({
+      id: m.id,
+      ayunas:
+        m.ayunas !== null && m.ayunas !== undefined ? Number(m.ayunas) : null,
+      postprandial:
+        m.postprandial !== null && m.postprandial !== undefined
+          ? Number(m.postprandial)
+          : null,
+      measured_at: m.measured_at,
+    }));
 
-    return { estado: "triste" as const, score: 40, color: "#F44336", avg };
-  }, []);
+    setLecturas(safeData);
+    setLoading(false);
+  }, [session?.user?.id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadLecturas();
+    }, [loadLecturas]),
+  );
+
+  const ultimos7 = useMemo(() => {
+    const limite = new Date();
+    limite.setDate(limite.getDate() - 7);
+    return lecturas.filter((m) => new Date(m.measured_at) >= limite);
+  }, [lecturas]);
+
+  const promedioAyunas = useMemo(() => {
+    const vals = ultimos7
+      .map((m) => m.ayunas)
+      .filter((v): v is number => v !== null && v !== undefined);
+
+    if (vals.length === 0) return 0;
+    return Math.round(vals.reduce((acc, v) => acc + v, 0) / vals.length);
+  }, [ultimos7]);
+
+  const promedioPost = useMemo(() => {
+    const vals = ultimos7
+      .map((m) => m.postprandial)
+      .filter((v): v is number => v !== null && v !== undefined);
+
+    if (vals.length === 0) return 0;
+    return Math.round(vals.reduce((acc, v) => acc + v, 0) / vals.length);
+  }, [ultimos7]);
+
+  const trend = useMemo(() => {
+    if (ultimos7.length === 0) return { text: "Sin datos", color: "#888" };
+    return getTrendInfo(promedioAyunas, promedioPost);
+  }, [ultimos7, promedioAyunas, promedioPost]);
+
+  const puntuacion = useMemo(() => {
+    if (ultimos7.length === 0) return 0;
+    return getScoreGlucosa(promedioAyunas, promedioPost);
+  }, [ultimos7, promedioAyunas, promedioPost]);
+
+  const estado = useMemo<"feliz" | "serio" | "triste">(() => {
+    if (puntuacion >= 90) return "feliz";
+    if (puntuacion >= 60) return "serio";
+    return "triste";
+  }, [puntuacion]);
+
+  const colorScore = useMemo(() => {
+    if (puntuacion >= 90) return "#4CAF50";
+    if (puntuacion >= 60) return "#FFC107";
+    return "#F44336";
+  }, [puntuacion]);
 
   const pancreasImg =
-    evaluacion.estado === "feliz"
+    estado === "feliz"
       ? pancreasFeliz
-      : evaluacion.estado === "serio"
+      : estado === "serio"
         ? pancreasSerio
         : pancreasTriste;
-  const lectura70 = lecturas[0];
-  const lectura120 = lecturas[1];
+
+  const ultimas3 = useMemo(() => lecturas.slice(0, 3), [lecturas]);
+
+  const handleDelete = async (id: string) => {
+    if (!session?.user?.id) return false;
+
+    const { error } = await supabase
+      .from("glucose_measurements")
+      .delete()
+      .eq("id", id)
+      .eq("user_id", session.user.id);
+
+    if (error) {
+      return false;
+    }
+
+    setLecturas((prev) => prev.filter((m) => m.id !== id));
+    return true;
+  };
 
   return (
     <ScrollView
@@ -95,32 +242,44 @@ export default function GlucosaScreen() {
           <View style={styles.leftCol}>
             <Text style={styles.muted}>Promedio</Text>
 
-            <Text style={styles.bigValue}>{lectura70?.mgdl ?? 0} mg/dL</Text>
-            <Text style={styles.italicHint}>
-              {lectura70?.nota ?? "Antes de comer"}
-            </Text>
+            {loading ? (
+              <ActivityIndicator size="small" />
+            ) : (
+              <>
+                <Text style={styles.bigValue}>{promedioAyunas} mg/dL</Text>
+                <Text style={styles.italicHint}>Antes de comer</Text>
 
-            <View style={{ height: 16 }} />
+                <View style={{ height: 16 }} />
 
-            <Text style={styles.bigValue}>{lectura120?.mgdl ?? 0} mg/dL</Text>
-            <Text style={styles.italicHint}>
-              {lectura120?.nota ?? "Dos horas después de comer"}
-            </Text>
+                <Text style={styles.bigValue}>{promedioPost} mg/dL</Text>
+                <Text style={styles.italicHint}>
+                  Dos horas después de comer
+                </Text>
+              </>
+            )}
           </View>
 
           <View style={styles.rightCol}>
             <Text style={styles.muted}>Tendencia</Text>
-            <Text style={styles.trendGood}>Bien</Text>
-            <Text style={styles.trendHint}>últimos 7 días</Text>
+            {loading ? (
+              <ActivityIndicator size="small" />
+            ) : (
+              <>
+                <Text style={[styles.trendGood, { color: trend.color }]}>
+                  {trend.text}
+                </Text>
+                <Text style={styles.trendHint}>últimos 7 días</Text>
+              </>
+            )}
           </View>
         </View>
       </View>
 
       <View style={styles.cardBig}>
         <View style={styles.healthLeft}>
-          <View style={[styles.circle, { borderColor: evaluacion.color }]}>
-            <Text style={[styles.scoreText, { color: evaluacion.color }]}>
-              {evaluacion.score}
+          <View style={[styles.circle, { borderColor: colorScore }]}>
+            <Text style={[styles.scoreText, { color: colorScore }]}>
+              {puntuacion}
             </Text>
           </View>
           <Text style={styles.scoreLabel}>Puntuación</Text>
@@ -137,36 +296,38 @@ export default function GlucosaScreen() {
 
       <Text style={styles.sectionTitle}>Lecturas Recientes</Text>
 
-      {lecturas.map((m) => (
-        <View key={m.id} style={styles.recentCard}>
-          <Text style={styles.recentValue}>{m.mgdl} mg/dL</Text>
-          <Text style={styles.recentDate}>{fmtHoyAyer(m.measured_at)}</Text>
-
-          <View style={{ flex: 1 }} />
-
-          <Text style={styles.recentHintRight}>últimos 7 días</Text>
-
-          <View style={{ height: 26 }} />
-
-          {m.nota ? <Text style={styles.recentNote}>{m.nota}</Text> : null}
+      {loading ? (
+        <View style={styles.recentCard}>
+          <Text style={styles.recentDate}>Cargando...</Text>
         </View>
-      ))}
-      {lecturas.map((m) => (
-        <View key={m.id} style={styles.recentCard}>
-          <Text style={styles.recentValue}>{m.mgdl} mg/dL</Text>
-          <Text style={styles.recentDate}>{fmtHoyAyer(m.measured_at)}</Text>
-
-          <View style={{ flex: 1 }} />
-
-          <Text style={styles.recentHintRight}>últimos 7 días</Text>
-
-          <View style={{ height: 26 }} />
-
-          {m.nota ? <Text style={styles.recentNote}>{m.nota}</Text> : null}
+      ) : ultimas3.length === 0 ? (
+        <View style={styles.recentCard}>
+          <Text style={styles.recentDate}>No hay mediciones registradas</Text>
         </View>
-      ))}
+      ) : (
+        ultimas3.map((m) => (
+          <View key={m.id} style={styles.recentCard}>
+            <Text style={styles.recentValue}>{getValorPrincipal(m)}</Text>
+            <Text style={styles.recentDate}>{fmtHoyAyer(m.measured_at)}</Text>
 
-      <HistorialGlucosaContent />
+            <View style={{ flex: 1 }} />
+
+            <Text style={styles.recentHintRight}>últimos 7 días</Text>
+
+            <View style={{ height: 26 }} />
+
+            {getNota(m) ? (
+              <Text style={styles.recentNote}>{getNota(m)}</Text>
+            ) : null}
+          </View>
+        ))
+      )}
+
+      <HistorialGlucosaContent
+        items={lecturas}
+        loading={loading}
+        onDelete={handleDelete}
+      />
     </ScrollView>
   );
 }
@@ -206,7 +367,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
 
-  trendGood: { fontSize: 20, fontWeight: "bold", color: "green", marginTop: 8 },
+  trendGood: { fontSize: 20, fontWeight: "bold", marginTop: 8 },
   trendHint: { fontSize: 12, color: "#888", fontStyle: "italic", marginTop: 4 },
 
   cardBig: {
@@ -235,16 +396,6 @@ const styles = StyleSheet.create({
   scoreLabel: { marginTop: 10, fontSize: 15, color: "#555" },
 
   pancreasImage: { width: 160, height: 110 },
-
-  primaryBtn: {
-    backgroundColor: "#007AFF",
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: "center",
-    marginBottom: 16,
-    elevation: 2,
-  },
-  primaryBtnText: { color: "#fff", fontWeight: "800", fontSize: 15 },
 
   sectionTitle: {
     fontSize: 18,

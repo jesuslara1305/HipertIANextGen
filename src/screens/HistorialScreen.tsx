@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -10,83 +10,9 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { getCategoriaPresion, MedicionPresion } from "./PresionArterialScreen";
 
 type Punto = { label: string; s: number; d: number };
-type Categoria = {
-  label: "Normal" | "Ligeramente elevada" | "Elevada" | "Alta" | "Muy alta";
-  bg: string;
-  fg: string;
-};
-
-type Medicion = {
-  id: string;
-  systolica: number;
-  diastolica: number;
-  measured_at: string;
-};
-
-const MOCK_MEDICIONES: Medicion[] = [
-  {
-    id: "m1",
-    systolica: 120,
-    diastolica: 80,
-    measured_at: "2025-11-27T17:34:39.000Z",
-  },
-  {
-    id: "m2",
-    systolica: 119,
-    diastolica: 78,
-    measured_at: "2025-11-27T10:09:30.000Z",
-  },
-  {
-    id: "m3",
-    systolica: 118,
-    diastolica: 79,
-    measured_at: "2025-11-26T02:15:38.000Z",
-  },
-  {
-    id: "m4",
-    systolica: 112,
-    diastolica: 79,
-    measured_at: "2025-11-26T02:14:55.000Z",
-  },
-  {
-    id: "m5",
-    systolica: 119,
-    diastolica: 79,
-    measured_at: "2025-11-26T00:23:31.000Z",
-  },
-  {
-    id: "m6",
-    systolica: 124,
-    diastolica: 79,
-    measured_at: "2025-11-25T22:10:10.000Z",
-  },
-  {
-    id: "m7",
-    systolica: 121,
-    diastolica: 77,
-    measured_at: "2025-11-25T08:10:10.000Z",
-  },
-  {
-    id: "m8",
-    systolica: 117,
-    diastolica: 76,
-    measured_at: "2025-11-24T10:10:10.000Z",
-  },
-];
-
-function getCategoria(s: number, d: number): Categoria {
-  if (s < 120 && d < 80)
-    return { label: "Normal", bg: "#DCFCE7", fg: "#166534" };
-  if (s >= 120 && s < 130 && d < 80)
-    return { label: "Ligeramente elevada", bg: "#E9F8D8", fg: "#3F6212" };
-  if ((s >= 130 && s < 140) || (d >= 80 && d < 90))
-    return { label: "Elevada", bg: "#FEF9C3", fg: "#92400E" };
-  if (s >= 140 || d >= 90)
-    return { label: "Alta", bg: "#FFEDD5", fg: "#9A3412" };
-  return { label: "Muy alta", bg: "#FEE2E2", fg: "#991B1B" };
-}
 
 function fmtHoyAyer(iso: string) {
   const d = new Date(iso);
@@ -183,22 +109,18 @@ const DualBarChart = ({
   );
 };
 
-/**
- * ✅ CONTENIDO REUTILIZABLE (SIN HEADER "Historial" y SIN ScrollView)
- * Esto es lo que vas a renderizar debajo de Lecturas Recientes.
- */
-export function HistorialContent({ embedded = true }: { embedded?: boolean }) {
-  const [loading, setLoading] = useState(true);
-  const [items, setItems] = useState<Medicion[]>([]);
+export function HistorialContent({
+  embedded = true,
+  items,
+  loading,
+  onDelete,
+}: {
+  embedded?: boolean;
+  items: MedicionPresion[];
+  loading: boolean;
+  onDelete: (id: string) => Promise<boolean>;
+}) {
   const [deletingId, setDeletingId] = useState<string | null>(null);
-
-  useEffect(() => {
-    const t = setTimeout(() => {
-      setItems(MOCK_MEDICIONES);
-      setLoading(false);
-    }, 400);
-    return () => clearTimeout(t);
-  }, []);
 
   const dualData: Punto[] = useMemo(
     () =>
@@ -215,21 +137,29 @@ export function HistorialContent({ embedded = true }: { embedded?: boolean }) {
 
   const resumen7 = useMemo(() => {
     if (items.length === 0) return null;
-    const ult7 = items.slice(0, 7);
+
+    const limite = new Date();
+    limite.setDate(limite.getDate() - 7);
+
+    const ult7 = items.filter((m) => new Date(m.measured_at) >= limite);
+
+    if (ult7.length === 0) return null;
+
     const sAvg = Math.round(
       ult7.reduce((a, m) => a + m.systolica, 0) / ult7.length,
     );
     const dAvg = Math.round(
       ult7.reduce((a, m) => a + m.diastolica, 0) / ult7.length,
     );
-    const cat = getCategoria(sAvg, dAvg);
+    const cat = getCategoriaPresion(sAvg, dAvg);
+
     return { sAvg, dAvg, cat, count: ult7.length };
   }, [items]);
 
-  const onDelete = (id: string) => {
+  const confirmDelete = (id: string) => {
     Alert.alert(
       "Eliminar medición",
-      "¿Seguro que deseas eliminar esta medición? (mock)",
+      "¿Seguro que deseas eliminar esta medición?",
       [
         { text: "Cancelar", style: "cancel" },
         {
@@ -237,18 +167,20 @@ export function HistorialContent({ embedded = true }: { embedded?: boolean }) {
           style: "destructive",
           onPress: async () => {
             setDeletingId(id);
-            setTimeout(() => {
-              setItems((prev) => prev.filter((m) => m.id !== id));
-              setDeletingId(null);
-            }, 350);
+            const ok = await onDelete(id);
+            setDeletingId(null);
+
+            if (!ok) {
+              Alert.alert("Error", "No se pudo eliminar la medición.");
+            }
           },
         },
       ],
     );
   };
 
-  const renderMedicion = ({ item }: { item: Medicion }) => {
-    const cat = getCategoria(item.systolica, item.diastolica);
+  const renderMedicion = ({ item }: { item: MedicionPresion }) => {
+    const cat = getCategoriaPresion(item.systolica, item.diastolica);
     const id = item.id;
     const isDeleting = deletingId === id;
 
@@ -269,7 +201,7 @@ export function HistorialContent({ embedded = true }: { embedded?: boolean }) {
 
         <TouchableOpacity
           style={styles.deleteBtn}
-          onPress={() => onDelete(id)}
+          onPress={() => confirmDelete(id)}
           disabled={isDeleting}
         >
           {isDeleting ? (
@@ -288,8 +220,6 @@ export function HistorialContent({ embedded = true }: { embedded?: boolean }) {
 
   return (
     <View style={embedded ? { backgroundColor: "#f7f7f7" } : styles.screen}>
-      {/* ⛔️ QUITAMOS EL HEADER "Historial" */}
-
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>
           Promedio (últimas {resumen7?.count ?? 0})
@@ -378,7 +308,9 @@ export default function HistorialScreen() {
     >
       <View style={styles.screen}>
         <Text style={styles.header}>Historial</Text>
-        <HistorialContent embedded={false} />
+        <Text style={styles.empty}>
+          Esta vista standalone ya no se usa sola en este flujo.
+        </Text>
       </View>
     </ScrollView>
   );

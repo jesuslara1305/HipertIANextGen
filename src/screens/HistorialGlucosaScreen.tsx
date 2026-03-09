@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -10,83 +10,9 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { getCategoriaGlucosa, MedicionGlucosa } from "./GlucosaScreen";
 
 type Punto = { label: string; a: number; p: number };
-
-type Categoria = {
-  label: "Normal" | "Ligeramente elevada" | "Elevada" | "Alta";
-  bg: string;
-  fg: string;
-};
-
-type MedicionGlucosa = {
-  id: string;
-  ayuno: number; // mg/dL
-  postprandial: number; // mg/dL
-  measured_at: string;
-};
-
-const MOCK_GLUCO: MedicionGlucosa[] = [
-  {
-    id: "g1",
-    ayuno: 70,
-    postprandial: 120,
-    measured_at: new Date().toISOString(),
-  },
-  {
-    id: "g2",
-    ayuno: 78,
-    postprandial: 135,
-    measured_at: new Date(Date.now() - 86400000).toISOString(),
-  },
-  {
-    id: "g3",
-    ayuno: 85,
-    postprandial: 142,
-    measured_at: new Date(Date.now() - 2 * 86400000).toISOString(),
-  },
-  {
-    id: "g4",
-    ayuno: 92,
-    postprandial: 155,
-    measured_at: new Date(Date.now() - 3 * 86400000).toISOString(),
-  },
-  {
-    id: "g5",
-    ayuno: 76,
-    postprandial: 128,
-    measured_at: new Date(Date.now() - 4 * 86400000).toISOString(),
-  },
-  {
-    id: "g6",
-    ayuno: 88,
-    postprandial: 160,
-    measured_at: new Date(Date.now() - 5 * 86400000).toISOString(),
-  },
-  {
-    id: "g7",
-    ayuno: 96,
-    postprandial: 170,
-    measured_at: new Date(Date.now() - 6 * 86400000).toISOString(),
-  },
-  {
-    id: "g8",
-    ayuno: 82,
-    postprandial: 140,
-    measured_at: new Date(Date.now() - 7 * 86400000).toISOString(),
-  },
-];
-
-function getCategoriaGlucosa(ayunoAvg: number, postAvg: number): Categoria {
-  const worst = Math.max(
-    ayunoAvg >= 126 ? 3 : ayunoAvg >= 100 ? 2 : 1,
-    postAvg >= 200 ? 3 : postAvg >= 140 ? 2 : 1,
-  );
-
-  if (worst === 1) return { label: "Normal", bg: "#DCFCE7", fg: "#166534" };
-  if (worst === 2) return { label: "Elevada", bg: "#FEF9C3", fg: "#92400E" };
-  return { label: "Alta", bg: "#FFEDD5", fg: "#9A3412" };
-}
 
 function fmtHoyAyer(iso: string) {
   const d = new Date(iso);
@@ -183,22 +109,45 @@ const DualBarChartGlucosa = ({
   );
 };
 
+function getCategoriaRegistro(item: MedicionGlucosa) {
+  const ayunoVal = item.ayunas ?? 0;
+  const postVal = item.postprandial ?? 0;
+  return getCategoriaGlucosa(ayunoVal, postVal);
+}
+
+function getLabelRegistro(item: MedicionGlucosa) {
+  if (item.ayunas !== null && item.postprandial !== null)
+    return "Ayuno / Postprandial";
+  if (item.ayunas !== null) return "Ayuno";
+  if (item.postprandial !== null) return "Postprandial";
+  return "";
+}
+
+function getMainValue(item: MedicionGlucosa) {
+  if (item.ayunas !== null && item.postprandial !== null) {
+    return `${item.ayunas}/${item.postprandial} mg/dL`;
+  }
+  if (item.ayunas !== null) {
+    return `${item.ayunas} mg/dL`;
+  }
+  if (item.postprandial !== null) {
+    return `${item.postprandial} mg/dL`;
+  }
+  return "--";
+}
+
 export function HistorialGlucosaContent({
   embedded = true,
+  items,
+  loading,
+  onDelete,
 }: {
   embedded?: boolean;
+  items: MedicionGlucosa[];
+  loading: boolean;
+  onDelete: (id: string) => Promise<boolean>;
 }) {
-  const [loading, setLoading] = useState(true);
-  const [items, setItems] = useState<MedicionGlucosa[]>([]);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-
-  useEffect(() => {
-    const t = setTimeout(() => {
-      setItems(MOCK_GLUCO);
-      setLoading(false);
-    }, 400);
-    return () => clearTimeout(t);
-  }, []);
 
   const dualData: Punto[] = useMemo(
     () =>
@@ -207,29 +156,47 @@ export function HistorialGlucosaContent({
         .reverse()
         .map((m) => ({
           label: fmtHoyAyer(m.measured_at),
-          a: m.ayuno,
-          p: m.postprandial,
+          a: m.ayunas ?? 0,
+          p: m.postprandial ?? 0,
         })),
     [items],
   );
 
   const resumen7 = useMemo(() => {
     if (items.length === 0) return null;
-    const ult7 = items.slice(0, 7);
-    const aAvg = Math.round(
-      ult7.reduce((acc, m) => acc + m.ayuno, 0) / ult7.length,
-    );
-    const pAvg = Math.round(
-      ult7.reduce((acc, m) => acc + m.postprandial, 0) / ult7.length,
-    );
+
+    const limite = new Date();
+    limite.setDate(limite.getDate() - 7);
+
+    const ult7 = items.filter((m) => new Date(m.measured_at) >= limite);
+    if (ult7.length === 0) return null;
+
+    const ayunos = ult7
+      .map((m) => m.ayunas)
+      .filter((v): v is number => v !== null && v !== undefined);
+
+    const posts = ult7
+      .map((m) => m.postprandial)
+      .filter((v): v is number => v !== null && v !== undefined);
+
+    const aAvg =
+      ayunos.length > 0
+        ? Math.round(ayunos.reduce((acc, v) => acc + v, 0) / ayunos.length)
+        : 0;
+
+    const pAvg =
+      posts.length > 0
+        ? Math.round(posts.reduce((acc, v) => acc + v, 0) / posts.length)
+        : 0;
+
     const cat = getCategoriaGlucosa(aAvg, pAvg);
     return { aAvg, pAvg, cat, count: ult7.length };
   }, [items]);
 
-  const onDelete = (id: string) => {
+  const confirmDelete = (id: string) => {
     Alert.alert(
       "Eliminar medición",
-      "¿Seguro que deseas eliminar esta medición? (mock)",
+      "¿Seguro que deseas eliminar esta medición?",
       [
         { text: "Cancelar", style: "cancel" },
         {
@@ -237,10 +204,12 @@ export function HistorialGlucosaContent({
           style: "destructive",
           onPress: async () => {
             setDeletingId(id);
-            setTimeout(() => {
-              setItems((prev) => prev.filter((m) => m.id !== id));
-              setDeletingId(null);
-            }, 350);
+            const ok = await onDelete(id);
+            setDeletingId(null);
+
+            if (!ok) {
+              Alert.alert("Error", "No se pudo eliminar la medición.");
+            }
           },
         },
       ],
@@ -249,33 +218,25 @@ export function HistorialGlucosaContent({
 
   const renderMedicion = ({ item }: { item: MedicionGlucosa }) => {
     const isDeleting = deletingId === item.id;
+    const cat = getCategoriaRegistro(item);
 
     return (
       <View style={styles.itemRow}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.measure}>
-            {item.ayuno}/{item.postprandial} mg/dL
-          </Text>
-          <Text style={styles.subMeasure}>Ayuno / Postprandial</Text>
+          <Text style={styles.measure}>{getMainValue(item)}</Text>
+          <Text style={styles.subMeasure}>{getLabelRegistro(item)}</Text>
           <Text style={styles.date}>{fmtHoyAyer(item.measured_at)}</Text>
         </View>
 
-        {resumen7 ? (
-          <View
-            style={[
-              styles.badge,
-              { backgroundColor: resumen7.cat.bg, marginRight: 8 },
-            ]}
-          >
-            <Text style={[styles.badgeText, { color: resumen7.cat.fg }]}>
-              {resumen7.cat.label}
-            </Text>
-          </View>
-        ) : null}
+        <View
+          style={[styles.badge, { backgroundColor: cat.bg, marginRight: 8 }]}
+        >
+          <Text style={[styles.badgeText, { color: cat.fg }]}>{cat.label}</Text>
+        </View>
 
         <TouchableOpacity
           style={styles.deleteBtn}
-          onPress={() => onDelete(item.id)}
+          onPress={() => confirmDelete(item.id)}
           disabled={isDeleting}
         >
           {isDeleting ? (
@@ -379,9 +340,6 @@ export function HistorialGlucosaContent({
   );
 }
 
-/**
- * ✅ Pantalla standalone (por si luego la quieres como tab)
- */
 export default function HistorialGlucosaScreen() {
   return (
     <ScrollView
@@ -391,7 +349,9 @@ export default function HistorialGlucosaScreen() {
     >
       <View style={styles.screen}>
         <Text style={styles.header}>Historial</Text>
-        <HistorialGlucosaContent embedded={false} />
+        <Text style={styles.empty}>
+          Esta vista standalone ya no se usa sola en este flujo.
+        </Text>
       </View>
     </ScrollView>
   );

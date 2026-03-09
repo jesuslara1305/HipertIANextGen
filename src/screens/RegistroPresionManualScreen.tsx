@@ -2,6 +2,7 @@ import { DateTimePickerAndroid } from "@react-native-community/datetimepicker";
 import { useNavigation } from "@react-navigation/native";
 import React, { useState } from "react";
 import {
+  Alert,
   Image,
   Modal,
   StyleSheet,
@@ -10,13 +11,18 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { useAuth } from "../../providers/AuthProvider";
+import { supabase } from "../services/supabase";
 
 export default function RegistroPresionManualScreen() {
-  const [systolica, setSistolica] = useState("");
+  const [sistolica, setSistolica] = useState("");
   const [diastolica, setDiastolica] = useState("");
   const [fecha, setFecha] = useState(new Date());
   const [modalVisible, setModalVisible] = useState(false);
+  const [loading, setLoading] = useState(false);
+
   const navigation = useNavigation<any>();
+  const { session } = useAuth();
 
   const mostrarSelectorFechaYHora = () => {
     DateTimePickerAndroid.open({
@@ -47,16 +53,64 @@ export default function RegistroPresionManualScreen() {
     });
   };
 
-  const guardarRegistro = () => {
-    console.log("S:", systolica);
-    console.log("D:", diastolica);
-    console.log("Fecha:", fecha);
+  const guardarRegistro = async () => {
+    if (!session?.user?.id) {
+      Alert.alert("Error", "No se encontró la sesión del usuario.");
+      return;
+    }
 
-    setModalVisible(true);
+    if (!sistolica.trim() || !diastolica.trim()) {
+      Alert.alert(
+        "Campos requeridos",
+        "Ingresa la presión sistólica y diastólica.",
+      );
+      return;
+    }
 
-    setTimeout(() => {
-      setModalVisible(false);
-    }, 1200);
+    const sistolicaNum = Number(sistolica);
+    const diastolicaNum = Number(diastolica);
+
+    if (
+      !Number.isFinite(sistolicaNum) ||
+      !Number.isFinite(diastolicaNum) ||
+      sistolicaNum <= 0 ||
+      diastolicaNum <= 0
+    ) {
+      Alert.alert(
+        "Datos inválidos",
+        "Ingresa valores válidos para la presión.",
+      );
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      const { error } = await supabase.from("bp_measurements").insert({
+        user_id: session.user.id,
+        systolica: sistolicaNum,
+        diastolica: diastolicaNum,
+        measured_at: fecha.toISOString(),
+        source: "manual",
+      });
+
+      if (error) {
+        Alert.alert("Error", "No se pudo guardar la medición.");
+        return;
+      }
+
+      setModalVisible(true);
+
+      setTimeout(() => {
+        setModalVisible(false);
+        setSistolica("");
+        setDiastolica("");
+      }, 1200);
+    } catch (e) {
+      Alert.alert("Error", "Ocurrió un problema al guardar la medición.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -68,8 +122,9 @@ export default function RegistroPresionManualScreen() {
             style={styles.input}
             keyboardType="numeric"
             placeholder="Ej. 120"
-            value={systolica}
+            value={sistolica}
             onChangeText={setSistolica}
+            editable={!loading}
           />
         </View>
 
@@ -81,19 +136,29 @@ export default function RegistroPresionManualScreen() {
             placeholder="Ej. 80"
             value={diastolica}
             onChangeText={setDiastolica}
+            editable={!loading}
           />
         </View>
       </View>
 
       <View style={styles.fechaContainer}>
         <Text style={styles.label}>Fecha y hora</Text>
-        <TouchableOpacity onPress={mostrarSelectorFechaYHora}>
+        <TouchableOpacity
+          onPress={mostrarSelectorFechaYHora}
+          disabled={loading}
+        >
           <Text style={styles.fecha}>{fecha.toLocaleString()}</Text>
         </TouchableOpacity>
       </View>
 
-      <TouchableOpacity style={styles.boton} onPress={guardarRegistro}>
-        <Text style={styles.botonTexto}>Guardar</Text>
+      <TouchableOpacity
+        style={styles.boton}
+        onPress={guardarRegistro}
+        disabled={loading}
+      >
+        <Text style={styles.botonTexto}>
+          {loading ? "Guardando..." : "Guardar"}
+        </Text>
       </TouchableOpacity>
 
       <Modal visible={modalVisible} transparent animationType="fade">

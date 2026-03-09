@@ -1,20 +1,26 @@
 import { DateTimePickerAndroid } from "@react-native-community/datetimepicker";
 import React, { useState } from "react";
 import {
-    Image,
-    Modal,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  Image,
+  Modal,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
+import { useAuth } from "../../providers/AuthProvider";
+import { supabase } from "../services/supabase";
 
 export default function RegistroGlucosaManualScreen() {
   const [ayunas, setAyunas] = useState("");
   const [postprandial, setPostprandial] = useState("");
   const [fecha, setFecha] = useState(new Date());
   const [modalVisible, setModalVisible] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const { session } = useAuth();
 
   const mostrarSelectorFechaYHora = () => {
     DateTimePickerAndroid.open({
@@ -45,13 +51,56 @@ export default function RegistroGlucosaManualScreen() {
     });
   };
 
-  const guardarRegistro = () => {
-    if (!ayunas && !postprandial) return;
+  const guardarRegistro = async () => {
+    if (!session?.user?.id) {
+      Alert.alert("Error", "No se encontró la sesión del usuario.");
+      return;
+    }
 
-    setModalVisible(true);
-    setTimeout(() => {
-      setModalVisible(false);
-    }, 1200);
+    if (!ayunas.trim() && !postprandial.trim()) {
+      Alert.alert("Campos requeridos", "Ingresa al menos un valor de glucosa.");
+      return;
+    }
+
+    const ayunasNum = ayunas.trim() ? Number(ayunas) : null;
+    const postprandialNum = postprandial.trim() ? Number(postprandial) : null;
+
+    if (
+      (ayunasNum !== null && (!Number.isFinite(ayunasNum) || ayunasNum <= 0)) ||
+      (postprandialNum !== null &&
+        (!Number.isFinite(postprandialNum) || postprandialNum <= 0))
+    ) {
+      Alert.alert("Datos inválidos", "Ingresa valores válidos de glucosa.");
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      const { error } = await supabase.from("glucose_measurements").insert({
+        user_id: session.user.id,
+        ayunas: ayunasNum,
+        postprandial: postprandialNum,
+        measured_at: fecha.toISOString(),
+      });
+
+      if (error) {
+        Alert.alert("Error", "No se pudo guardar el registro.");
+        return;
+      }
+
+      setModalVisible(true);
+
+      setTimeout(() => {
+        setModalVisible(false);
+        setAyunas("");
+        setPostprandial("");
+      }, 1200);
+    } catch (e) {
+      Alert.alert("Error", "Ocurrió un problema al guardar el registro.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -64,6 +113,7 @@ export default function RegistroGlucosaManualScreen() {
             keyboardType="numeric"
             value={ayunas}
             onChangeText={setAyunas}
+            editable={!loading}
           />
         </View>
 
@@ -74,18 +124,29 @@ export default function RegistroGlucosaManualScreen() {
             keyboardType="numeric"
             value={postprandial}
             onChangeText={setPostprandial}
+            editable={!loading}
           />
         </View>
       </View>
+
       <View style={styles.fechaContainer}>
         <Text style={styles.label}>Fecha y hora</Text>
-        <TouchableOpacity onPress={mostrarSelectorFechaYHora}>
+        <TouchableOpacity
+          onPress={mostrarSelectorFechaYHora}
+          disabled={loading}
+        >
           <Text style={styles.fecha}>{fecha.toLocaleString()}</Text>
         </TouchableOpacity>
       </View>
 
-      <TouchableOpacity style={styles.boton} onPress={guardarRegistro}>
-        <Text style={styles.botonTexto}>Guardar</Text>
+      <TouchableOpacity
+        style={styles.boton}
+        onPress={guardarRegistro}
+        disabled={loading}
+      >
+        <Text style={styles.botonTexto}>
+          {loading ? "Guardando..." : "Guardar"}
+        </Text>
       </TouchableOpacity>
 
       <Modal visible={modalVisible} transparent animationType="fade">
@@ -97,7 +158,7 @@ export default function RegistroGlucosaManualScreen() {
               resizeMode="contain"
             />
             <Text style={{ fontSize: 18, fontWeight: "bold" }}>
-              ¡Registro guardado!
+              ¡Medición guardada!
             </Text>
           </View>
         </View>
