@@ -101,7 +101,7 @@ export default function LoginScreen() {
         resizeMode="contain"
       />
 
-      <Text style={styles.title}>Bienvenido a HipertIA</Text>
+      <Text style={styles.title}>Bienvenido a HiperGIA</Text>
 
       <TextInput
         style={styles.input}

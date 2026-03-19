@@ -50,6 +50,19 @@ export default function AjustesScreen() {
 
   const email = session?.user?.email ?? "usuario@correo.com";
 
+  // Función para calcular la edad basándose en la fecha de nacimiento (dob)
+  const calcularEdad = (fechaNacimiento: string | null) => {
+    if (!fechaNacimiento) return "No registrada";
+    const hoy = new Date();
+    const cumple = new Date(fechaNacimiento);
+    let edad = hoy.getFullYear() - cumple.getFullYear();
+    const m = hoy.getMonth() - cumple.getMonth();
+    if (m < 0 || (m === 0 && hoy.getDate() < cumple.getDate())) {
+      edad--;
+    }
+    return edad;
+  };
+
   const firstInitial = useMemo(
     () => email.trim().charAt(0).toUpperCase() || "U",
     [email],
@@ -68,17 +81,25 @@ export default function AjustesScreen() {
       fromDate.setDate(fromDate.getDate() - 30);
       const fromIso = fromDate.toISOString();
 
+      // Consultamos perfil y mediciones en paralelo
       const [
+        { data: perfil },
         { data: presionData, error: presionError },
         { data: glucosaData, error: glucosaError },
       ] = await Promise.all([
+        supabase
+          .from("profiles")
+          .select(
+            "first_name, last_name_paterno, last_name_materno, dob, sex_at_birth",
+          )
+          .eq("id", session.user.id)
+          .single(),
         supabase
           .from("bp_measurements")
           .select("id, systolica, diastolica, measured_at")
           .eq("user_id", session.user.id)
           .gte("measured_at", fromIso)
           .order("measured_at", { ascending: false }),
-
         supabase
           .from("glucose_measurements")
           .select("id, ayunas, postprandial, measured_at")
@@ -94,6 +115,21 @@ export default function AjustesScreen() {
         );
         return;
       }
+
+      // Datos del usuario para el encabezado
+      const nombreUsuario = perfil
+        ? `${perfil.first_name} ${perfil.last_name_paterno} ${perfil.last_name_materno ?? ""}`.trim()
+        : "No registrado";
+      const edadUsuario = calcularEdad(perfil?.dob);
+      const mapGenero: Record<string, string> = {
+        male: "Masculino",
+        female: "Femenino",
+        other: "Otro",
+      };
+
+      const generoUsuario = perfil?.sex_at_birth
+        ? mapGenero[perfil.sex_at_birth.toLowerCase()] || "No especificado"
+        : "No especificado";
 
       const presion: BpMeasurement[] = (presionData ?? []).map((item: any) => ({
         id: item.id,
@@ -166,65 +202,53 @@ export default function AjustesScreen() {
                 size: A4;
                 margin: 24px;
               }
-
               body {
                 font-family: Arial, sans-serif;
                 color: #111;
                 font-size: 12px;
               }
-
               .report-header {
                 margin-bottom: 18px;
                 page-break-inside: avoid;
               }
-
               h1 {
                 color: #007AFF;
                 margin: 0 0 8px 0;
                 font-size: 26px;
               }
-
               h2 {
                 margin: 0 0 12px 0;
                 color: #222;
                 font-size: 18px;
               }
-
               p {
                 margin: 4px 0;
                 color: #444;
                 font-size: 13px;
               }
-
               .section {
                 margin-top: 24px;
                 page-break-inside: auto;
               }
-
               .section-title {
                 page-break-after: avoid;
                 margin-bottom: 10px;
               }
-
               table {
                 width: 100%;
                 border-collapse: collapse;
                 margin-top: 10px;
                 table-layout: fixed;
               }
-
               thead {
                 display: table-header-group;
               }
-
               tfoot {
                 display: table-footer-group;
               }
-
               tr {
                 page-break-inside: avoid;
               }
-
               th, td {
                 border: 1px solid #dcdcdc;
                 padding: 10px;
@@ -233,15 +257,9 @@ export default function AjustesScreen() {
                 vertical-align: top;
                 word-wrap: break-word;
               }
-
               th {
                 background: #f3f7ff;
               }
-
-              .muted {
-                color: #666;
-              }
-
               .footer {
                 position: fixed;
                 bottom: 0;
@@ -251,15 +269,8 @@ export default function AjustesScreen() {
                 font-size: 11px;
                 color: #777;
               }
-
-              .page-number:after {
-                content: counter(page);
-              }
-
-              .total-pages:after {
-                content: counter(pages);
-              }
-
+              .page-number:after { content: counter(page); }
+              .total-pages:after { content: counter(pages); }
               .summary-box {
                 background: #f8fbff;
                 border: 1px solid #dcdcdc;
@@ -268,7 +279,6 @@ export default function AjustesScreen() {
                 margin-top: 12px;
                 page-break-inside: avoid;
               }
-
               .summary-title {
                 font-weight: bold;
                 margin-bottom: 6px;
@@ -278,22 +288,21 @@ export default function AjustesScreen() {
           </head>
           <body>
             <div class="report-header">
-              <h1>Reporte de mediciones - HipertIA</h1>
-              <p><strong>Usuario:</strong> ${escapeHtml(email)}</p>
+              <h1>Reporte de mediciones - HiperGIA</h1>
+              <p><strong>Usuario:</strong> ${escapeHtml(nombreUsuario)}</p>
+              <p><strong>Correo:</strong> ${escapeHtml(email)}</p>
+              <p><strong>Edad:</strong> ${edadUsuario} años</p>
+              <p><strong>Género:</strong> ${escapeHtml(generoUsuario)}</p>
               <p><strong>Periodo:</strong> Últimos 30 días</p>
-              <p><strong>Generado:</strong> ${escapeHtml(
-                new Date().toLocaleString("es-MX"),
-              )}</p>
+              <p><strong>Generado:</strong> ${escapeHtml(new Date().toLocaleString("es-MX"))}</p>
             </div>
 
             <div class="section">
               <h2 class="section-title">Presión arterial</h2>
-
               <div class="summary-box">
                 <div class="summary-title">Resumen</div>
                 <p>Total de mediciones: <strong>${presion.length}</strong></p>
               </div>
-
               <table>
                 <thead>
                   <tr>
@@ -310,12 +319,10 @@ export default function AjustesScreen() {
 
             <div class="section">
               <h2 class="section-title">Glucosa</h2>
-
               <div class="summary-box">
                 <div class="summary-title">Resumen</div>
                 <p>Total de mediciones: <strong>${glucosa.length}</strong></p>
               </div>
-
               <table>
                 <thead>
                   <tr>
@@ -354,7 +361,7 @@ export default function AjustesScreen() {
 
       await Sharing.shareAsync(uri, {
         mimeType: "application/pdf",
-        dialogTitle: "Exportar historial de HipertIA",
+        dialogTitle: "Exportar historial de HiperGIA",
         UTI: "com.adobe.pdf",
       });
     } catch (error) {
@@ -375,23 +382,30 @@ export default function AjustesScreen() {
       fromDate.setDate(fromDate.getDate() - 30);
       const fromIso = fromDate.toISOString();
 
-      const [{ data: presionData }, { data: glucosaData }] = await Promise.all([
-        supabase
-          .from("bp_measurements")
-          .select("systolica, diastolica, measured_at")
-          .eq("user_id", session.user.id)
-          .gte("measured_at", fromIso)
-          .order("measured_at", { ascending: false })
-          .limit(5),
-
-        supabase
-          .from("glucose_measurements")
-          .select("ayunas, postprandial, measured_at")
-          .eq("user_id", session.user.id)
-          .gte("measured_at", fromIso)
-          .order("measured_at", { ascending: false })
-          .limit(5),
-      ]);
+      const [{ data: perfil }, { data: presionData }, { data: glucosaData }] =
+        await Promise.all([
+          supabase
+            .from("profiles")
+            .select(
+              "first_name, last_name_paterno, last_name_materno, dob, sex_at_birth",
+            )
+            .eq("id", session.user.id)
+            .single(),
+          supabase
+            .from("bp_measurements")
+            .select("systolica, diastolica, measured_at")
+            .eq("user_id", session.user.id)
+            .gte("measured_at", fromIso)
+            .order("measured_at", { ascending: false })
+            .limit(5),
+          supabase
+            .from("glucose_measurements")
+            .select("ayunas, postprandial, measured_at")
+            .eq("user_id", session.user.id)
+            .gte("measured_at", fromIso)
+            .order("measured_at", { ascending: false })
+            .limit(5),
+        ]);
 
       if (
         (presionData?.length ?? 0) === 0 &&
@@ -403,6 +417,20 @@ export default function AjustesScreen() {
         );
         return;
       }
+
+      const nombreUsuario = perfil
+        ? `${perfil.first_name} ${perfil.last_name_paterno} ${perfil.last_name_materno ?? ""}`.trim()
+        : "No registrado";
+      const edadUsuario = calcularEdad(perfil?.dob);
+      const mapGenero: Record<string, string> = {
+        male: "Masculino",
+        female: "Femenino",
+        other: "Otro",
+      };
+
+      const generoUsuario = perfil?.sex_at_birth
+        ? mapGenero[perfil.sex_at_birth.toLowerCase()] || "No especificado"
+        : "No especificado";
 
       const presionTexto =
         presionData && presionData.length > 0
@@ -434,11 +462,14 @@ export default function AjustesScreen() {
 
       const mensaje =
         `Historial de salud (últimos 30 días)\n\n` +
-        `Usuario: ${email}\n\n` +
+        `Usuario: ${nombreUsuario}\n` +
+        `Correo: ${email}\n` +
+        `Edad: ${edadUsuario} años\n` +
+        `Género: ${generoUsuario}\n\n` +
         `Se comparten únicamente las 5 mediciones más recientes de cada tipo.\n\n` +
         `--- Presión arterial ---\n${presionTexto}\n\n` +
         `--- Glucosa ---\n${glucosaTexto}\n\n` +
-        `Generado con la app HipertIA.\n` +
+        `Generado con la app HiperGIA.\n` +
         `Las mediciones incluidas son solo datos registrados, no interpretación médica.`;
 
       await Share.share({
@@ -452,7 +483,7 @@ export default function AjustesScreen() {
   const onPrivacidad = () => {
     Alert.alert(
       "Política de privacidad",
-      `HipertIA recopila únicamente la información necesaria para registrar tus mediciones de salud.
+      `HiperGIA recopila únicamente la información necesaria para registrar tus mediciones de salud.
 
 Los datos almacenados incluyen:
 • Mediciones de presión arterial
@@ -462,7 +493,7 @@ Los datos almacenados incluyen:
 
 Esta información se utiliza únicamente para mostrar tu historial dentro de la aplicación y generar reportes personales.
 
-HipertIA no vende, comparte ni distribuye tu información a terceros.
+HiperGIA no vende, comparte ni distribuye tu información a terceros.
 
 El usuario es responsable del uso que haga de los datos exportados o compartidos.
 
@@ -476,7 +507,7 @@ Para cualquier duda sobre privacidad puedes contactar al soporte.`,
   const onTerminos = () => {
     Alert.alert(
       "Términos y condiciones",
-      `El uso de HipertIA implica la aceptación de los siguientes términos:
+      `El uso de HiperGIA implica la aceptación de los siguientes términos:
 
 1. La aplicación está destinada únicamente para registro personal de mediciones.
 2. Los datos mostrados no constituyen diagnóstico médico.
@@ -484,7 +515,7 @@ Para cualquier duda sobre privacidad puedes contactar al soporte.`,
 4. La aplicación no se hace responsable por decisiones médicas tomadas a partir de la información registrada.
 5. El usuario puede exportar o compartir su información bajo su propio criterio.
 
-HipertIA puede actualizar estos términos en futuras versiones de la aplicación.`,
+HiperGIA puede actualizar estos términos en futuras versiones de la aplicación.`,
       [{ text: "Aceptar" }],
     );
   };
@@ -492,10 +523,10 @@ HipertIA puede actualizar estos términos en futuras versiones de la aplicación
   const onSoporte = () => {
     Alert.alert(
       "Ayuda y soporte",
-      `Centro de soporte HipertIA
+      `Centro de soporte HiperGIA
 
 Correo:
-soporte@hipertia.app
+soporte@hipergia.app
 
 Teléfono:
 +52 229 555 3812
@@ -643,7 +674,6 @@ function ItemAjuste({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f7f7f7" },
   content: { padding: 20 },
-
   perfil: { alignItems: "center", marginBottom: 10 },
   avatar: {
     backgroundColor: "#cce2ff",
@@ -655,7 +685,6 @@ const styles = StyleSheet.create({
   },
   inicial: { fontSize: 32, color: "#007AFF", fontWeight: "bold" },
   nombre: { marginTop: 10, fontSize: 18, fontWeight: "600" },
-
   miPerfil: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -667,7 +696,6 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   miPerfilTexto: { fontSize: 16, fontWeight: "500" },
-
   section: {
     marginBottom: 20,
     backgroundColor: "#fff",
@@ -684,12 +712,9 @@ const styles = StyleSheet.create({
   },
   itemTitulo: { fontSize: 16, fontWeight: "600" },
   itemSubtitulo: { fontSize: 13, color: "#777", marginTop: 2 },
-
   cambiar: { color: "#007AFF", fontWeight: "600" },
-
   whatsBtn: { flexDirection: "row", alignItems: "center" },
   whatsIcon: { width: 26, height: 26, marginRight: 8, opacity: 0.6 },
-
   logout: {
     borderWidth: 1,
     borderColor: "#FF3B30",
@@ -700,6 +725,5 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
   },
   logoutTexto: { color: "#FF3B30", fontWeight: "bold", fontSize: 16 },
-
   version: { textAlign: "center", fontSize: 12, color: "#aaa", marginTop: 20 },
 });
