@@ -1,6 +1,8 @@
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import React from "react";
 
+import AnalisisRiesgoGlucosaScreen from "../screens/AnalisisRiesgoGlucosaScreen";
+import AnalisisRiesgoPresionScreen from "../screens/AnalisisRiesgoPresionScreen";
 import GlucosaScreen from "../screens/GlucosaScreen";
 import MedicionInicioScreen from "../screens/MedicionInicioScreen";
 import PresionArterialScreen from "../screens/PresionArterialScreen";
@@ -27,13 +29,25 @@ export default function MedicionStack() {
       <Stack.Screen
         name="RegistroGlucosaManual"
         component={RegistroGlucosaManualScreen}
-        options={{ title: "Registro de glucosa" }}
+        options={{ title: "Registro manual de glucosa" }}
       />
 
       <Stack.Screen
         name="PresionArterial"
         component={PresionArterialScreen}
         options={{ title: "Presión Arterial" }}
+      />
+
+      <Stack.Screen
+        name="AnalisisRiesgo"
+        component={AnalisisRiesgoPresionScreen}
+        options={{ title: "Análisis de Riesgo" }}
+      />
+
+      <Stack.Screen
+        name="AnalisisRiesgoGlucosa"
+        component={AnalisisRiesgoGlucosaScreen}
+        options={{ title: "Análisis de Glucosa" }}
       />
 
       <Stack.Screen

@@ -52,6 +52,7 @@ export default function BottomTabNavigator() {
         headerTitleStyle: { color: "#333", fontWeight: "bold" },
 
         tabBarShowLabel: true,
+        tabBarHideOnKeyboard: true,
         tabBarStyle: styles.tabBar,
         tabBarActiveTintColor: "#007AFF",
         tabBarInactiveTintColor: "#aaa",

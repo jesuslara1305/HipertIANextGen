@@ -6,6 +6,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from "react-native";
 import { useAuth } from "../../providers/AuthProvider";
@@ -294,6 +295,19 @@ export default function GlucosaScreen() {
         </View>
       </View>
 
+      {/* Tarjeta de Riesgo Glucosa */}
+      <View style={styles.cardRiesgo}>
+        <Text style={styles.titleRiesgo}>Riesgo Actual</Text>
+        <Text style={styles.nivelRiesgo}>Moderado</Text>
+        <Text style={styles.subRiesgo}>Riesgo de Diabetes</Text>
+        <Text style={styles.fechaRiesgo}>Último análisis hace 2 días</Text>
+        <TouchableOpacity
+          onPress={() => navigation.navigate("AnalisisRiesgoGlucosa")}
+        >
+          <Text style={styles.linkAnalisis}>Ver análisis</Text>
+        </TouchableOpacity>
+      </View>
+
       <Text style={styles.sectionTitle}>Lecturas Recientes</Text>
 
       {loading ? (
@@ -424,4 +438,33 @@ const styles = StyleSheet.create({
   },
 
   recentNote: { fontSize: 14, color: "#888", fontStyle: "italic" },
+  cardRiesgo: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    elevation: 2,
+    alignItems: "center",
+  },
+  titleRiesgo: { fontSize: 16, fontWeight: "600", alignSelf: "flex-start" },
+  nivelRiesgo: {
+    fontSize: 32,
+    fontWeight: "bold",
+    color: "#D97706",
+    marginVertical: 8,
+  },
+  subRiesgo: { fontSize: 16, color: "#D97706", fontWeight: "600" },
+  fechaRiesgo: {
+    fontSize: 12,
+    color: "#999",
+    marginTop: 4,
+    fontStyle: "italic",
+  },
+  linkAnalisis: {
+    fontSize: 14,
+    color: "#007AFF",
+    fontWeight: "600",
+    marginTop: 12,
+    textDecorationLine: "underline",
+  },
 });

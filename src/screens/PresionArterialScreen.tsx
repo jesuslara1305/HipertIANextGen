@@ -36,6 +36,7 @@ export type MedicionPresion = {
   id: string;
   systolica: number;
   diastolica: number;
+  heart_rate: number | null;
   measured_at: string;
 };
 
@@ -102,12 +103,11 @@ export default function PresionArterialScreen() {
 
     const { data, error } = await supabase
       .from("bp_measurements")
-      .select("id, systolica, diastolica, measured_at")
+      .select("id, systolica, diastolica, heart_rate, measured_at")
       .eq("user_id", session.user.id)
       .order("measured_at", { ascending: false });
 
     if (error) {
-      console.log("bp_measurements load error:", error.message);
       setMediciones([]);
       setLoading(false);
       return;
@@ -117,6 +117,7 @@ export default function PresionArterialScreen() {
       id: m.id,
       systolica: Number(m.systolica ?? 0),
       diastolica: Number(m.diastolica ?? 0),
+      heart_rate: m.heart_rate !== null ? Number(m.heart_rate) : null,
       measured_at: m.measured_at,
     }));
 
@@ -262,6 +263,20 @@ export default function PresionArterialScreen() {
         </View>
       </TouchableOpacity>
 
+      <View style={styles.cardRiesgo}>
+        <Text style={styles.titleRiesgo}>Riesgo Actual</Text>
+        <Text style={styles.nivelRiesgo}>Alto</Text>
+        <Text style={styles.subRiesgo}>Riesgo de Hipertensión</Text>
+        <Text style={styles.fechaRiesgo}>Último análisis hace 2 días</Text>
+        <TouchableOpacity
+          onPress={() => {
+            navigation.navigate("AnalisisRiesgo");
+          }}
+        >
+          <Text style={styles.linkAnalisis}>Ver análisis</Text>
+        </TouchableOpacity>
+      </View>
+
       <View style={styles.card}>
         <Text style={styles.title}>Lecturas Recientes</Text>
 
@@ -274,6 +289,7 @@ export default function PresionArterialScreen() {
             <View key={m.id} style={styles.recentRow}>
               <Text style={styles.reading}>
                 {m.systolica}/{m.diastolica} mmHg
+                {m.heart_rate ? `  •  ${m.heart_rate} lpm` : ""}
               </Text>
               <Text style={styles.readingTime}>
                 {fmtHoyAyer(m.measured_at)}
@@ -302,6 +318,36 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 16,
     elevation: 2,
+  },
+
+  cardRiesgo: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    elevation: 2,
+    alignItems: "center",
+  },
+  titleRiesgo: { fontSize: 16, fontWeight: "600", alignSelf: "flex-start" },
+  nivelRiesgo: {
+    fontSize: 32,
+    fontWeight: "bold",
+    color: "#DC2626",
+    marginVertical: 8,
+  },
+  subRiesgo: { fontSize: 16, color: "#DC2626", fontWeight: "600" },
+  fechaRiesgo: {
+    fontSize: 12,
+    color: "#999",
+    marginTop: 4,
+    fontStyle: "italic",
+  },
+  linkAnalisis: {
+    fontSize: 14,
+    color: "#007AFF",
+    fontWeight: "600",
+    marginTop: 12,
+    textDecorationLine: "underline",
   },
 
   cardBig: {
@@ -351,5 +397,5 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   reading: { fontSize: 16, fontWeight: "bold" },
-  readingTime: { fontSize: 12, color: "#888" },
+  readingTime: { fontSize: 12, color: "#888", marginTop: 4 },
 });

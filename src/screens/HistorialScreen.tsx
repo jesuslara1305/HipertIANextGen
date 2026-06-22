@@ -189,6 +189,7 @@ export function HistorialContent({
         <View style={{ flex: 1 }}>
           <Text style={styles.measure}>
             {item.systolica}/{item.diastolica} mmHg
+            {item.heart_rate ? `  •  ${item.heart_rate} lpm` : ""}
           </Text>
           <Text style={styles.date}>{fmtHoyAyer(item.measured_at)}</Text>
         </View>
@@ -374,7 +375,7 @@ const styles = StyleSheet.create({
     borderTopColor: "#eee",
   },
   measure: { fontSize: 16, fontWeight: "600" },
-  date: { fontSize: 12, color: "#666", marginTop: 2 },
+  date: { fontSize: 12, color: "#666", marginTop: 4 },
   badge: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14 },
   badgeText: { fontSize: 12, fontWeight: "700" },
   deleteBtn: {
