@@ -15,6 +15,20 @@ import { useAuth } from "../../providers/AuthProvider";
 import { supabase } from "../services/supabase";
 
 type ChatMsg = { from: "user" | "ia"; text: string };
+type HistorialPresion = {
+  fecha: string | null;
+  dia: string | null;
+  hora: string | null;
+  sistolica: number | null;
+  diastolica: number | null;
+};
+type HistorialGlucosa = {
+  fecha: string | null;
+  dia: string | null;
+  hora: string | null;
+  ayunas: number | null;
+  postprandial: number | null;
+};
 
 function calcularEdad(dob: string | null) {
   if (!dob) return 0;
@@ -35,6 +49,19 @@ function alcoholANumero(frecuencia: string | null) {
   return mapa[frecuencia?.toLowerCase() ?? "none"] ?? 0.0;
 }
 
+function formatearRegistroMedicion(item: any) {
+  const fecha = item?.measured_at ? new Date(item.measured_at) : null;
+  return {
+    fecha: item?.measured_at ?? null,
+    dia: fecha ? fecha.toLocaleDateString("es-ES") : null,
+    hora: fecha
+      ? fecha.toLocaleTimeString("es-ES", {
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      : null,
+  };
+}
 export default function ChatScreen() {
   const [pregunta, setPregunta] = useState("");
   const [chatHistory, setChatHistory] = useState<ChatMsg[]>([]);
@@ -72,72 +99,143 @@ export default function ChatScreen() {
     setLoading(true);
 
     try {
-      let datosPaciente = {};
-      let tienePerfilValido = false;
+      let datosPaciente: Record<string, unknown> = {};
+      let tieneDatosMedicos = false;
+
+      let historialPresion: HistorialPresion[] = [];
+      let historialGlucosa: HistorialGlucosa[] = [];
 
       if (session?.user?.id) {
-        const [{ data: perfil }, { data: presion }, { data: glucosa }] =
-          await Promise.all([
-            supabase
-              .from("profiles")
-              .select("*")
-              .eq("id", session.user.id)
-              .single(),
-            supabase
-              .from("bp_measurements")
-              .select("*")
-              .eq("user_id", session.user.id)
-              .order("measured_at", { ascending: false })
-              .limit(1)
-              .single(),
-            supabase
-              .from("glucose_measurements")
-              .select("*")
-              .eq("user_id", session.user.id)
-              .order("measured_at", { ascending: false })
-              .limit(1)
-              .single(),
-          ]);
+        const [perfilResult, presionResult, glucosaResult] = await Promise.all([
+          supabase
+            .from("profiles")
+            .select("*")
+            .eq("id", session.user.id)
+            .maybeSingle(),
+          supabase
+            .from("bp_measurements")
+            .select("systolica, diastolica, measured_at")
+            .eq("user_id", session.user.id)
+            .order("measured_at", { ascending: false })
+            .limit(5),
+          supabase
+            .from("glucose_measurements")
+            .select("ayunas, postprandial, measured_at")
+            .eq("user_id", session.user.id)
+            .order("measured_at", { ascending: false })
+            .limit(5),
+        ]);
 
-        if (perfil && perfil.dob && perfil.weight_kg) {
-          tienePerfilValido = true;
+        const erroresConsulta = [
+          perfilResult.error?.message,
+          presionResult.error?.message,
+          glucosaResult.error?.message,
+        ].filter(Boolean);
+
+        if (erroresConsulta.length > 0) {
+          throw new Error(
+            `No se pudieron leer los datos médicos: ${erroresConsulta.join(" | ")}`,
+          );
+        }
+
+        const perfil = perfilResult.data;
+        const presionData = presionResult.data;
+        const glucosaData = glucosaResult.data;
+
+        historialPresion = (presionData ?? []).map((item: any) => ({
+          ...formatearRegistroMedicion(item),
+          sistolica: item?.systolica == null ? null : Number(item.systolica),
+          diastolica: item?.diastolica == null ? null : Number(item.diastolica),
+        }));
+
+        historialGlucosa = (glucosaData ?? []).map((item: any) => ({
+          ...formatearRegistroMedicion(item),
+          ayunas: item?.ayunas == null ? null : Number(item.ayunas),
+          postprandial:
+            item?.postprandial == null ? null : Number(item.postprandial),
+        }));
+
+        if (perfil) {
           const health = perfil.health || {};
           datosPaciente = {
-            Age: calcularEdad(perfil.dob),
-            Gender: perfil.sex_at_birth === "male" ? 1 : 0,
-            BMI: perfil.bmi || 25,
-            Cholesterol: health.cholesterol_level || 200,
-            Triglycerides: health.triglycerides_level || 150,
+            Age: perfil.dob ? calcularEdad(perfil.dob) : null,
+            Gender:
+              perfil.sex_at_birth === "male"
+                ? 1
+                : perfil.sex_at_birth === "female"
+                  ? 0
+                  : null,
+            BMI: perfil.bmi ?? null,
+            Weight_kg: perfil.weight_kg ?? null,
+            Cholesterol: health.cholesterol_level ?? null,
+            Triglycerides: health.triglycerides_level ?? null,
             Smoking_Status:
               health.smoking_status === "current"
                 ? 2
                 : health.smoking_status === "former"
                   ? 1
+                  : health.smoking_status
+                    ? 0
+                    : null,
+            Alcohol_Intake: health.alcohol_use
+              ? alcoholANumero(health.alcohol_use)
+              : null,
+            Physical_Activity_Level: health.physical_activity_level ?? null,
+            Family_History:
+              health.family_history_hta == null
+                ? null
+                : health.family_history_hta
+                  ? 1
                   : 0,
-            Alcohol_Intake: alcoholANumero(health.alcohol_use),
-            Physical_Activity_Level: health.physical_activity_level ?? 0,
-            Family_History: health.family_history_hta ? 1 : 0,
-            Diabetes: health.diabetes_diagnosed ? 1 : 0,
-            Stress_Level: Math.min(health.stress_level || 4, 9),
-            Salt_Intake: health.salt_intake || 2.5,
-            Sleep_Duration: health.sleep_hours || 8,
-            Heart_Rate: health.heart_rate || 80,
-            Glucose: glucosa?.ayunas || glucosa?.postprandial || 90,
-            Systolic_BP: presion?.systolica || 120,
-            Diastolic_BP: presion?.diastolica || 80,
+            Diabetes:
+              health.diabetes_diagnosed == null
+                ? null
+                : health.diabetes_diagnosed
+                  ? 1
+                  : 0,
+            Stress_Level:
+              health.stress_level == null
+                ? null
+                : Math.min(health.stress_level, 9),
+            Salt_Intake: health.salt_intake ?? null,
+            Sleep_Duration: health.sleep_hours ?? null,
+            Heart_Rate: health.heart_rate ?? null,
           };
         }
+
+        tieneDatosMedicos = Boolean(
+          perfil || historialPresion.length || historialGlucosa.length,
+        );
       }
 
       let textoParaIA = textoUsuario;
-      if (!tienePerfilValido) {
+      if (!tieneDatosMedicos) {
         textoParaIA += `\n\n[INSTRUCCIÓN DEL SISTEMA: El usuario no tiene datos médicos registrados en la base de datos actualmente. Si su pregunta es general (ej. "¿qué es la hipertensión?"), respóndela de forma normal. Pero si pide que le calcules su riesgo, que analices sus datos o que evalúes su estado, NO inventes diagnósticos ni devuelvas un JSON. Discúlpate amablemente e indícale que primero necesita ir a la pestaña "Mi Perfil" o "Medición" para registrar sus datos y poder hacer la predicción.]`;
       }
 
+      const historialConversacion = chatHistory.slice(-8).map((mensaje) => ({
+        rol: mensaje.from === "user" ? "usuario" : "asistente",
+        contenido: mensaje.text,
+      }));
+
+      // Los historiales también se incluyen dentro de `perfil` para conservar
+      // compatibilidad con versiones anteriores de la API ya desplegadas.
+      const perfilConContexto = {
+        ...datosPaciente,
+        historialPresion,
+        historialGlucosa,
+        historialConversacion,
+      };
+
       const payload = {
         pregunta: textoParaIA,
-        perfil: datosPaciente,
+        perfil: perfilConContexto,
+        historialPresion,
+        historialGlucosa,
+        historialConversacion,
       };
+
+      console.log("[Chat payload enviado]", JSON.stringify(payload, null, 2));
 
       const response = await fetch(
         "https://chatbot-bp.onrender.com/preguntar",
@@ -148,7 +246,21 @@ export default function ChatScreen() {
         },
       );
 
-      const data = await response.json();
+      const responseText = await response.text();
+      let data: any = {};
+      try {
+        data = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        data = { respuesta: responseText };
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          String(
+            data?.detail ?? data?.respuesta ?? `Error HTTP ${response.status}`,
+          ),
+        );
+      }
 
       let respuestaFinal = "";
       if (typeof data === "object" && (data.puntuacion || data.clasificacion)) {
@@ -159,11 +271,15 @@ export default function ChatScreen() {
 
       setChatHistory((prev) => [...prev, { from: "ia", text: respuestaFinal }]);
     } catch (error) {
+      console.error("[Chat error]", error);
       setChatHistory((prev) => [
         ...prev,
         {
           from: "ia",
-          text: "Ocurrió un error al conectar con la IA predictiva.",
+          text:
+            error instanceof Error
+              ? `No pude consultar tus datos o la IA: ${error.message}`
+              : "Ocurrió un error al conectar con la IA predictiva.",
         },
       ]);
     } finally {

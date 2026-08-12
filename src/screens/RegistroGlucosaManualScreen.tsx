@@ -1,5 +1,7 @@
 import { DateTimePickerAndroid } from "@react-native-community/datetimepicker";
 import { useNavigation } from "@react-navigation/native";
+import { CameraView, useCameraPermissions } from "expo-camera";
+import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import React, { useEffect, useRef, useState } from "react";
 import {
@@ -20,6 +22,13 @@ import {
 import { useAuth } from "../../providers/AuthProvider";
 import { supabase } from "../services/supabase";
 
+type ImagenGlucosa = {
+  uri: string;
+  base64: string;
+};
+
+const GLUCOSA_API_URL = "http://192.168.1.67:5000/leer-glucosa";
+
 export default function RegistroGlucosaManualScreen() {
   const [ayunas, setAyunas] = useState("");
   const [postprandial, setPostprandial] = useState("");
@@ -28,6 +37,14 @@ export default function RegistroGlucosaManualScreen() {
   const [loading, setLoading] = useState(false);
   const [procesandoFoto, setProcesandoFoto] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+
+  const [mostrarCamara, setMostrarCamara] = useState(false);
+  const [imagenCapturada, setImagenCapturada] = useState<ImagenGlucosa | null>(
+    null,
+  );
+
+  const [permission, requestPermission] = useCameraPermissions();
+  const cameraRef = useRef<any>(null);
 
   const navigation = useNavigation<any>();
   const { session } = useAuth();
@@ -81,109 +98,221 @@ export default function RegistroGlucosaManualScreen() {
     });
   };
 
-  const tomarFotoGlucosa = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== "granted") {
-      Alert.alert("Permiso denegado", "Se requiere acceso a la cámara.");
-      return;
+  const prepararImagenGlucosa = async (uri: string): Promise<ImagenGlucosa> => {
+    const manipResult = await ImageManipulator.manipulateAsync(
+      uri,
+      [
+        {
+          resize: {
+            width: 1000,
+          },
+        },
+      ],
+      {
+        compress: 0.75,
+        base64: true,
+        format: ImageManipulator.SaveFormat.JPEG,
+      },
+    );
+
+    if (!manipResult.base64) {
+      throw new Error("No se pudo preparar la imagen.");
     }
 
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [3, 4],
-      quality: 1,
-      base64: true,
-    });
+    return {
+      uri: manipResult.uri,
+      base64: manipResult.base64,
+    };
+  };
 
-    if (!result.canceled && result.assets && result.assets[0].base64) {
-      procesarImagen(result.assets[0].base64);
+  const abrirCamaraGlucosa = async () => {
+    if (!permission?.granted) {
+      const { status } = await requestPermission();
+
+      if (status !== "granted") {
+        Alert.alert("Permiso denegado", "Se requiere acceso a la cámara.");
+        return;
+      }
+    }
+
+    setMostrarCamara(true);
+    setImagenCapturada(null);
+  };
+
+  const capturarFotoGlucosa = async () => {
+    if (!cameraRef.current) return;
+
+    setProcesandoFoto(true);
+
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        base64: false,
+        quality: 1,
+      });
+
+      const imagenPreparada = await prepararImagenGlucosa(photo.uri);
+      setImagenCapturada(imagenPreparada);
+    } catch (error: any) {
+      Alert.alert(
+        "Error",
+        error?.message || "Ocurrió un problema al capturar la imagen.",
+      );
+    } finally {
+      setProcesandoFoto(false);
     }
   };
 
-  const procesarImagen = async (base64: string) => {
-    setProcesandoFoto(true);
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000);
+  const seleccionarImagenGaleria = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
-    const OCR_API_KEY = "K82959862488957";
-    const OCR_URL = "https://api.ocr.space/parse/image";
+    if (status !== "granted") {
+      Alert.alert(
+        "Permiso denegado",
+        "Se requiere acceso a la galería para seleccionar una imagen.",
+      );
+      return;
+    }
 
     try {
-      const formData = new FormData();
-      formData.append("base64Image", `data:image/jpeg;base64,${base64}`);
-      formData.append("language", "eng");
-      formData.append("isOverlayRequired", "false");
-      formData.append("scale", "true");
-      // Cambiamos al Engine 1, suele ser mejor ignorando el "ruido" y uniendo caracteres
-      formData.append("OCREngine", "1");
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [3, 4],
+        quality: 1,
+        base64: false,
+      });
 
-      const response = await fetch(OCR_URL, {
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        return;
+      }
+
+      setProcesandoFoto(true);
+
+      const asset = result.assets[0];
+      const imagenPreparada = await prepararImagenGlucosa(asset.uri);
+
+      setMostrarCamara(false);
+      setImagenCapturada(imagenPreparada);
+    } catch (error: any) {
+      Alert.alert(
+        "Error",
+        error?.message || "Ocurrió un problema al seleccionar la imagen.",
+      );
+    } finally {
+      setProcesandoFoto(false);
+    }
+  };
+
+  const llamarGeminiGlucosa = async (imagen: ImagenGlucosa) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+    try {
+      console.log("Enviando glucosa a:", GLUCOSA_API_URL);
+      console.log("Tamaño base64 glucosa:", imagen.base64.length);
+
+      const response = await fetch(GLUCOSA_API_URL, {
         method: "POST",
         headers: {
-          apikey: OCR_API_KEY,
+          "Content-Type": "application/json",
         },
-        body: formData,
+        body: JSON.stringify({
+          imageBase64: imagen.base64,
+        }),
         signal: controller.signal,
       });
 
       clearTimeout(timeoutId);
 
-      if (!response.ok) {
-        throw new Error("BadResponse");
-      }
-
       const data = await response.json();
 
-      if (
-        data.IsErroredOnProcessing ||
-        !data.ParsedResults ||
-        data.ParsedResults.length === 0
-      ) {
-        throw new Error("NoDetected");
-      }
+      console.log("RESPUESTA GLUCOSA:", data);
 
-      const rawText = data.ParsedResults[0].ParsedText as string;
-
-      // Buscamos cualquier número que tenga de 2 a 3 dígitos
-      const numerosEncontrados = rawText.match(/\d{2,3}/g);
-
-      if (numerosEncontrados && numerosEncontrados.length >= 1) {
-        // En los glucómetros, a veces lee la hora (ej: 16:12).
-        // Vamos a tomar el número más grande que encuentre asumiendo que es la glucosa.
-        const numerosOrdenados = numerosEncontrados
-          .map(Number)
-          .sort((a, b) => b - a);
-        const valorGlucosa = String(numerosOrdenados[0]);
-
-        setAyunas(valorGlucosa);
-        setPostprandial("");
-
-        Alert.alert(
-          "Dato extraído",
-          `Se detectó el valor ${valorGlucosa} mg/dL y se colocó en "Ayunas". Si tu medición fue después de comer, por favor bórralo y escríbelo en "Postprandial".`,
-        );
-      } else {
+      if (!response.ok || !data.ok) {
         throw new Error(
-          `Lectura fallida. El escáner leyó esto:\n"${rawText}"\n\nNo logró identificar el número grande de la glucosa.`,
+          data?.message ||
+            "No se pudo detectar el valor de glucosa en la imagen.",
         );
       }
+
+      return data;
     } catch (error: any) {
+      clearTimeout(timeoutId);
+
+      console.log("ERROR GLUCOSA:", error);
+
       if (error.name === "AbortError") {
-        Alert.alert(
-          "Tiempo agotado",
-          "La API de OCR tardó demasiado en responder. Intenta de nuevo.",
-        );
-      } else {
-        Alert.alert(
-          "Lectura fallida",
-          error.message !== "NoDetected" && error.message !== "BadResponse"
-            ? error.message
-            : "No se pudo detectar el número de glucosa con claridad. Por favor ingrésalo de forma manual.",
+        throw new Error(
+          "El servidor tardó demasiado en responder. Intenta con una imagen más clara o menos pesada.",
         );
       }
+
+      throw new Error(
+        error?.message ||
+          "No se pudo conectar con el servidor. Verifica que Flask esté encendido y que la IP sea correcta.",
+      );
+    }
+  };
+
+  const aplicarValorDetectado = (valor: number) => {
+    Alert.alert(
+      "Valor detectado",
+      `Se detectó: ${valor} mg/dL\n\n¿Dónde quieres colocar este valor?`,
+      [
+        {
+          text: "Cancelar",
+          style: "cancel",
+        },
+        {
+          text: "Ayunas",
+          onPress: () => {
+            setAyunas(valor.toString());
+            setPostprandial("");
+            setMostrarCamara(false);
+            setImagenCapturada(null);
+          },
+        },
+        {
+          text: "Postprandial",
+          onPress: () => {
+            setPostprandial(valor.toString());
+            setAyunas("");
+            setMostrarCamara(false);
+            setImagenCapturada(null);
+          },
+        },
+      ],
+      { cancelable: true },
+    );
+  };
+
+  const procesarImagenGlucosa = async () => {
+    if (!imagenCapturada?.base64) return;
+
+    setProcesandoFoto(true);
+
+    try {
+      const resultado = await llamarGeminiGlucosa(imagenCapturada);
+      const valorGlucosa = Number(resultado.glucosa);
+
+      if (!Number.isFinite(valorGlucosa)) {
+        throw new Error("La respuesta no contiene un valor válido de glucosa.");
+      }
+
+      if (valorGlucosa < 20 || valorGlucosa > 600) {
+        throw new Error(
+          "El valor detectado está fuera de un rango humano realista.",
+        );
+      }
+
+      aplicarValorDetectado(valorGlucosa);
+    } catch (error: any) {
+      Alert.alert(
+        "Lectura fallida",
+        error?.message ||
+          "No se pudo detectar el número de glucosa. Intenta con una foto más cercana y clara.",
+      );
     } finally {
-      clearTimeout(timeoutId);
       setProcesandoFoto(false);
     }
   };
@@ -252,6 +381,105 @@ export default function RegistroGlucosaManualScreen() {
     }
   };
 
+  if (imagenCapturada) {
+    return (
+      <View style={styles.previewContainer}>
+        <Text style={styles.previewTitle}>Verifica tu foto</Text>
+
+        <Text style={styles.previewSubtitle}>
+          Asegúrate de que el número principal del glucómetro se vea claro,
+          grande y sin reflejos.
+        </Text>
+
+        <Image
+          source={{ uri: imagenCapturada.uri }}
+          style={styles.previewImage}
+          resizeMode="contain"
+        />
+
+        <View style={styles.previewActions}>
+          <TouchableOpacity
+            style={styles.btnReintentar}
+            onPress={() => setImagenCapturada(null)}
+            disabled={procesandoFoto}
+          >
+            <Text style={styles.btnText}>Reintentar</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.btnExtraer}
+            onPress={procesarImagenGlucosa}
+            disabled={procesandoFoto}
+          >
+            {procesandoFoto ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.btnText}>Procesar imagen</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  if (mostrarCamara) {
+    return (
+      <View style={styles.cameraScreen}>
+        <CameraView style={styles.camera} ref={cameraRef} facing="back">
+          <View style={styles.overlay}>
+            <View style={styles.unfocusedContainer} />
+
+            <View style={styles.middleContainer}>
+              <View style={styles.unfocusedContainer} />
+
+              <View style={styles.focusedBox}>
+                <View style={styles.cornerTopLeft} />
+                <View style={styles.cornerTopRight} />
+                <View style={styles.cornerBottomLeft} />
+                <View style={styles.cornerBottomRight} />
+
+                <Text style={styles.instruccionScanner}>ALINEAR</Text>
+                <Text style={styles.instruccionScannerInfo}>
+                  Coloca el número grande del glucómetro.
+                </Text>
+              </View>
+
+              <View style={styles.unfocusedContainer} />
+            </View>
+
+            <View style={styles.unfocusedBottomContainer}>
+              <View style={styles.cameraActions}>
+                <TouchableOpacity
+                  style={styles.cancelarCamaraBtn}
+                  onPress={() => {
+                    setMostrarCamara(false);
+                    setImagenCapturada(null);
+                  }}
+                >
+                  <Text style={styles.cancelarCamaraText}>Volver</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.captureBtn}
+                  onPress={capturarFotoGlucosa}
+                  disabled={procesandoFoto}
+                >
+                  {procesandoFoto ? (
+                    <ActivityIndicator color="#000" size="large" />
+                  ) : (
+                    <View style={styles.captureBtnInner} />
+                  )}
+                </TouchableOpacity>
+
+                <View style={{ width: 80 }} />
+              </View>
+            </View>
+          </View>
+        </CameraView>
+      </View>
+    );
+  }
+
   return (
     <View
       style={[styles.container, { paddingBottom: keyboardVisible ? 0 : 85 }]}
@@ -268,20 +496,37 @@ export default function RegistroGlucosaManualScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.fotoSeccion}>
-            <Text style={styles.fotoTitulo}>Escaneo con cámara</Text>
+            <Text style={styles.fotoTitulo}>Escaneo de glucómetro</Text>
+
             <Text style={styles.fotoDescripcion}>
-              Toma una foto de la pantalla de tu glucómetro. Por defecto, el
-              valor se guardará en "Ayunas".
+              Toma una foto o sube una imagen de la pantalla de tu glucómetro.
+              La app detectará el número grande de glucosa y después podrás
+              elegir si corresponde a "Ayunas" o "Postprandial".
             </Text>
+
             <TouchableOpacity
               style={styles.botonFoto}
-              onPress={tomarFotoGlucosa}
+              onPress={abrirCamaraGlucosa}
               disabled={procesandoFoto || loading}
             >
               {procesandoFoto ? (
                 <ActivityIndicator color="#fff" />
               ) : (
-                <Text style={styles.botonFotoTexto}>Capturar monitor</Text>
+                <Text style={styles.botonFotoTexto}>Abrir escáner</Text>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.botonGaleria}
+              onPress={seleccionarImagenGaleria}
+              disabled={procesandoFoto || loading}
+            >
+              {procesandoFoto ? (
+                <ActivityIndicator color="#007AFF" />
+              ) : (
+                <Text style={styles.botonGaleriaTexto}>
+                  Subir imagen desde galería
+                </Text>
               )}
             </TouchableOpacity>
           </View>
@@ -293,6 +538,7 @@ export default function RegistroGlucosaManualScreen() {
           <View style={styles.row}>
             <View style={styles.inputBox}>
               <Text style={styles.label}>En ayunas</Text>
+
               <TextInput
                 style={styles.input}
                 keyboardType="numeric"
@@ -305,6 +551,7 @@ export default function RegistroGlucosaManualScreen() {
 
             <View style={[styles.inputBox, { marginRight: 0 }]}>
               <Text style={styles.label}>Postprandial</Text>
+
               <TextInput
                 style={styles.input}
                 keyboardType="numeric"
@@ -318,6 +565,7 @@ export default function RegistroGlucosaManualScreen() {
 
           <View style={styles.fechaContainer}>
             <Text style={styles.label}>Fecha y hora</Text>
+
             <TouchableOpacity
               onPress={mostrarSelectorFechaYHora}
               disabled={loading || procesandoFoto}
@@ -346,6 +594,7 @@ export default function RegistroGlucosaManualScreen() {
               style={{ width: 100, height: 100, marginBottom: 20 }}
               resizeMode="contain"
             />
+
             <Text style={{ fontSize: 18, fontWeight: "bold" }}>
               ¡Registro guardado!
             </Text>
@@ -363,6 +612,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     paddingTop: 26,
   },
+
   fotoSeccion: {
     backgroundColor: "#f8f9fa",
     padding: 16,
@@ -371,54 +621,80 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#e9ecef",
   },
+
   fotoTitulo: {
     fontSize: 16,
     fontWeight: "bold",
     marginBottom: 8,
     color: "#343a40",
   },
+
   fotoDescripcion: {
     fontSize: 13,
     color: "#6c757d",
     marginBottom: 16,
     lineHeight: 18,
   },
+
   botonFoto: {
     backgroundColor: "#28a745",
     padding: 12,
     borderRadius: 10,
     alignItems: "center",
   },
+
   botonFotoTexto: {
     color: "#fff",
     fontSize: 15,
     fontWeight: "600",
   },
+
+  botonGaleria: {
+    marginTop: 10,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#007AFF",
+    padding: 12,
+    borderRadius: 10,
+    alignItems: "center",
+  },
+
+  botonGaleriaTexto: {
+    color: "#007AFF",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+
   divisor: {
     height: 1,
     backgroundColor: "#dee2e6",
     marginBottom: 20,
   },
+
   seccionTitulo: {
     fontSize: 18,
     fontWeight: "bold",
     marginBottom: 16,
     color: "#212529",
   },
+
   row: {
     flexDirection: "row",
     justifyContent: "space-between",
     marginTop: 8,
   },
+
   inputBox: {
     flex: 1,
     marginRight: 14,
   },
+
   label: {
     fontWeight: "600",
     marginBottom: 8,
     color: "#111",
   },
+
   input: {
     borderWidth: 1,
     borderColor: "#d1d5db",
@@ -427,37 +703,244 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     marginBottom: 16,
   },
+
   fechaContainer: {
     marginTop: 4,
     marginBottom: 18,
   },
+
   fecha: {
     color: "#007AFF",
     fontSize: 14,
     marginTop: 10,
   },
+
   boton: {
     backgroundColor: "#007AFF",
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: "center",
   },
+
   botonTexto: {
     color: "#fff",
     fontSize: 14,
     fontWeight: "700",
   },
+
   modalContainer: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.3)",
     justifyContent: "center",
     alignItems: "center",
   },
+
   modalContent: {
     backgroundColor: "#fff",
     padding: 24,
     borderRadius: 16,
     alignItems: "center",
     elevation: 5,
+  },
+
+  previewContainer: {
+    flex: 1,
+    backgroundColor: "#111",
+    padding: 20,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  previewTitle: {
+    color: "#4CAF50",
+    fontSize: 26,
+    fontWeight: "bold",
+    marginBottom: 10,
+  },
+
+  previewSubtitle: {
+    color: "#ccc",
+    fontSize: 14,
+    textAlign: "center",
+    marginBottom: 30,
+    lineHeight: 20,
+  },
+
+  previewImage: {
+    width: "100%",
+    height: 350,
+    borderColor: "#4CAF50",
+    borderWidth: 2,
+    borderRadius: 10,
+    marginBottom: 40,
+    backgroundColor: "#222",
+  },
+
+  previewActions: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    width: "100%",
+  },
+
+  btnReintentar: {
+    backgroundColor: "#dc3545",
+    padding: 15,
+    borderRadius: 10,
+    flex: 1,
+    marginRight: 10,
+    alignItems: "center",
+  },
+
+  btnExtraer: {
+    backgroundColor: "#28a745",
+    padding: 15,
+    borderRadius: 10,
+    flex: 1,
+    marginLeft: 10,
+    alignItems: "center",
+  },
+
+  btnText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "bold",
+  },
+
+  cameraScreen: {
+    flex: 1,
+    backgroundColor: "black",
+  },
+
+  camera: {
+    flex: 1,
+  },
+
+  overlay: {
+    flex: 1,
+  },
+
+  unfocusedContainer: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.85)",
+  },
+
+  unfocusedBottomContainer: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.85)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  middleContainer: {
+    flexDirection: "row",
+    height: "55%",
+  },
+
+  focusedBox: {
+    width: "45%",
+    borderColor: "#4CAF50",
+    borderWidth: 3,
+    backgroundColor: "transparent",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  instruccionScanner: {
+    color: "#4CAF50",
+    fontSize: 20,
+    fontWeight: "bold",
+    opacity: 0.9,
+    textAlign: "center",
+    letterSpacing: 1,
+  },
+
+  instruccionScannerInfo: {
+    color: "#fff",
+    fontSize: 12,
+    opacity: 0.7,
+    marginTop: 5,
+    textAlign: "center",
+    paddingHorizontal: 8,
+  },
+
+  cameraActions: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    alignItems: "center",
+    width: "100%",
+  },
+
+  cancelarCamaraBtn: {
+    padding: 15,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    borderRadius: 10,
+  },
+
+  cancelarCamaraText: {
+    color: "white",
+    fontSize: 16,
+    fontWeight: "bold",
+  },
+
+  captureBtn: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: "#fff",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  captureBtnInner: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: "#fff",
+    borderWidth: 2,
+    borderColor: "#000",
+  },
+
+  cornerTopLeft: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    width: 20,
+    height: 20,
+    borderTopWidth: 5,
+    borderLeftWidth: 5,
+    borderColor: "#4CAF50",
+  },
+
+  cornerTopRight: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    width: 20,
+    height: 20,
+    borderTopWidth: 5,
+    borderRightWidth: 5,
+    borderColor: "#4CAF50",
+  },
+
+  cornerBottomLeft: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    width: 20,
+    height: 20,
+    borderBottomWidth: 5,
+    borderLeftWidth: 5,
+    borderColor: "#4CAF50",
+  },
+
+  cornerBottomRight: {
+    position: "absolute",
+    bottom: 0,
+    right: 0,
+    width: 20,
+    height: 20,
+    borderBottomWidth: 5,
+    borderRightWidth: 5,
+    borderColor: "#4CAF50",
   },
 });

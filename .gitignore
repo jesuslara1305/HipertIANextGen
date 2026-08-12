@@ -41,3 +41,4 @@ app-example
 # generated native folders
 /ios
 /android
+src/screens/bp-opencv-api/.env

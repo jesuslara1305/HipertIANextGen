@@ -1,7 +1,7 @@
 import { DateTimePickerAndroid } from "@react-native-community/datetimepicker";
-import { useNavigation } from "@react-navigation/native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as ImageManipulator from "expo-image-manipulator";
+import * as ImagePicker from "expo-image-picker";
 import React, { useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -18,6 +18,360 @@ import {
 import { useAuth } from "../../providers/AuthProvider";
 import { supabase } from "../services/supabase";
 
+type ImagenOCR = {
+  uri: string;
+  base64: string;
+  width: number;
+  height: number;
+};
+
+type CandidatoNumero = {
+  valor: number;
+  top: number;
+  left: number;
+  height: number;
+  raw: string;
+  fuente: "overlay" | "texto";
+};
+
+type ValoresDetectados = {
+  sistolica: number;
+  diastolica: number;
+  pulso: number;
+  rawText: string;
+};
+
+const OPENCV_API_URL = "http://192.168.1.67:5000/leer-presion";
+
+const esNumeroValidoGeneral = (num: number) => {
+  return Number.isFinite(num) && num >= 30 && num <= 300;
+};
+
+const esTrioMedicoValido = (
+  sistolica: number,
+  diastolica: number,
+  pulso: number,
+) => {
+  if (sistolica < 60 || sistolica > 300) return false;
+  if (diastolica < 40 || diastolica > 200) return false;
+  if (pulso < 30 || pulso > 250) return false;
+  if (diastolica >= sistolica) return false;
+
+  return true;
+};
+
+const normalizarTokenParaOCR = (token: string) => {
+  let limpio = token.trim();
+
+  limpio = limpio.replace(/[Oo]/g, "0");
+  limpio = limpio.replace(/[Il|!]/g, "1");
+
+  /*
+    Solo convertimos S en 5 cuando el token es corto.
+    Esto evita que palabras como SYS se conviertan en números falsos.
+  */
+  if (limpio.length <= 4 && /\d/.test(limpio)) {
+    limpio = limpio.replace(/[Ss]/g, "5");
+  }
+
+  return limpio;
+};
+
+const extraerNumerosDeToken = (token: string) => {
+  const limpio = normalizarTokenParaOCR(token);
+  const grupos = limpio.match(/\d+/g) || [];
+
+  const numeros: number[] = [];
+
+  grupos.forEach((grupo) => {
+    if (grupo.length >= 2 && grupo.length <= 3) {
+      const num = parseInt(grupo, 10);
+      if (esNumeroValidoGeneral(num)) {
+        numeros.push(num);
+      }
+    }
+  });
+
+  return numeros;
+};
+
+const extraerCandidatosDesdeTexto = (rawText: string): CandidatoNumero[] => {
+  const candidatos: CandidatoNumero[] = [];
+  const lineas = rawText.split(/\n/).map((linea) => linea.trim());
+  let orden = 0;
+
+  lineas.forEach((linea) => {
+    if (!linea) return;
+
+    const tokens = linea
+      .replace(/[/:;,_-]/g, " ")
+      .split(/\s+/)
+      .filter(Boolean);
+
+    tokens.forEach((token) => {
+      const numeros = extraerNumerosDeToken(token);
+
+      numeros.forEach((num) => {
+        candidatos.push({
+          valor: num,
+          top: orden * 100,
+          left: 0,
+          height: 20,
+          raw: token,
+          fuente: "texto",
+        });
+
+        orden += 1;
+      });
+    });
+  });
+
+  return candidatos;
+};
+
+const extraerCandidatosDesdeOverlay = (
+  parsedResult: any,
+): CandidatoNumero[] => {
+  const candidatos: CandidatoNumero[] = [];
+  const lineas = parsedResult?.TextOverlay?.Lines || [];
+
+  lineas.forEach((linea: any, lineaIndex: number) => {
+    const palabras = linea?.Words || [];
+    const lineTop = Number(linea?.MinTop ?? lineaIndex * 100);
+    const lineHeight = Number(linea?.MaxHeight ?? 20);
+
+    palabras.forEach((palabra: any) => {
+      const raw = String(palabra?.WordText ?? "").trim();
+      if (!raw) return;
+
+      const numeros = extraerNumerosDeToken(raw);
+
+      numeros.forEach((num) => {
+        candidatos.push({
+          valor: num,
+          top: Number(palabra?.Top ?? lineTop),
+          left: Number(palabra?.Left ?? 0),
+          height: Number(palabra?.Height ?? lineHeight),
+          raw,
+          fuente: "overlay",
+        });
+      });
+    });
+  });
+
+  return candidatos;
+};
+
+const limpiarDuplicadosCercanos = (candidatos: CandidatoNumero[]) => {
+  const ordenados = [...candidatos].sort((a, b) => {
+    if (a.top !== b.top) return a.top - b.top;
+    return a.left - b.left;
+  });
+
+  const resultado: CandidatoNumero[] = [];
+
+  ordenados.forEach((actual) => {
+    const repetido = resultado.some((guardado) => {
+      const mismoValor = guardado.valor === actual.valor;
+      const cercaVertical = Math.abs(guardado.top - actual.top) <= 18;
+      const cercaHorizontal = Math.abs(guardado.left - actual.left) <= 40;
+
+      return mismoValor && cercaVertical && cercaHorizontal;
+    });
+
+    if (!repetido) {
+      resultado.push(actual);
+    }
+  });
+
+  return resultado;
+};
+
+const seleccionarMejorTrio = (candidatos: CandidatoNumero[]) => {
+  const filtrados = limpiarDuplicadosCercanos(
+    candidatos.filter((c) => esNumeroValidoGeneral(c.valor)),
+  );
+
+  if (filtrados.length < 3) return null;
+
+  const ordenados = [...filtrados].sort((a, b) => {
+    if (a.top !== b.top) return a.top - b.top;
+    return a.left - b.left;
+  });
+
+  let mejorTrio: [CandidatoNumero, CandidatoNumero, CandidatoNumero] | null =
+    null;
+  let mejorPuntaje = -Infinity;
+
+  for (let i = 0; i < ordenados.length - 2; i++) {
+    for (let j = i + 1; j < ordenados.length - 1; j++) {
+      for (let k = j + 1; k < ordenados.length; k++) {
+        const a = ordenados[i];
+        const b = ordenados[j];
+        const c = ordenados[k];
+
+        const sistolica = a.valor;
+        const diastolica = b.valor;
+        const pulso = c.valor;
+
+        if (!esTrioMedicoValido(sistolica, diastolica, pulso)) {
+          continue;
+        }
+
+        const alturaTotal = a.height + b.height + c.height;
+        const diferenciaHorizontal =
+          Math.abs(a.left - b.left) + Math.abs(b.left - c.left);
+
+        const distanciaAB = Math.abs(b.top - a.top);
+        const distanciaBC = Math.abs(c.top - b.top);
+        const equilibrioVertical = Math.abs(distanciaAB - distanciaBC);
+
+        let puntaje = 0;
+
+        /*
+          Los números grandes del display suelen tener mayor altura.
+          Por eso les damos más peso.
+        */
+        puntaje += alturaTotal * 10;
+
+        /*
+          Los 3 valores del baumanómetro suelen estar alineados en columna.
+        */
+        puntaje -= diferenciaHorizontal * 0.15;
+
+        /*
+          Normalmente están separados de forma relativamente uniforme.
+        */
+        puntaje -= equilibrioVertical * 0.05;
+
+        /*
+          Rangos comunes para presión y pulso.
+        */
+        if (sistolica >= 80 && sistolica <= 220) puntaje += 30;
+        if (diastolica >= 45 && diastolica <= 130) puntaje += 30;
+        if (pulso >= 40 && pulso <= 180) puntaje += 30;
+
+        if (puntaje > mejorPuntaje) {
+          mejorPuntaje = puntaje;
+          mejorTrio = [a, b, c];
+        }
+      }
+    }
+  }
+
+  if (!mejorTrio) return null;
+
+  return {
+    sistolica: mejorTrio[0].valor,
+    diastolica: mejorTrio[1].valor,
+    pulso: mejorTrio[2].valor,
+  };
+};
+
+const detectarPorDigitosPegados = (rawText: string) => {
+  const normalizado = rawText
+    .replace(/[Oo]/g, "0")
+    .replace(/[Il|!]/g, "1")
+    .replace(/[Ss]/g, "5");
+
+  const digitos = normalizado.replace(/\D/g, "");
+
+  const probarTrio = (a: string, b: string, c: string) => {
+    const sistolica = parseInt(a, 10);
+    const diastolica = parseInt(b, 10);
+    const pulso = parseInt(c, 10);
+
+    if (esTrioMedicoValido(sistolica, diastolica, pulso)) {
+      return { sistolica, diastolica, pulso };
+    }
+
+    return null;
+  };
+
+  if (digitos.length === 7) {
+    return probarTrio(
+      digitos.slice(0, 3),
+      digitos.slice(3, 5),
+      digitos.slice(5, 7),
+    );
+  }
+
+  if (digitos.length === 6) {
+    return probarTrio(
+      digitos.slice(0, 2),
+      digitos.slice(2, 4),
+      digitos.slice(4, 6),
+    );
+  }
+
+  if (digitos.length === 8) {
+    const opcion1 = probarTrio(
+      digitos.slice(0, 3),
+      digitos.slice(3, 6),
+      digitos.slice(6, 8),
+    );
+
+    if (opcion1) return opcion1;
+
+    return probarTrio(
+      digitos.slice(0, 3),
+      digitos.slice(3, 5),
+      digitos.slice(5, 8),
+    );
+  }
+
+  return null;
+};
+
+const extraerValoresMedicion = (data: any): ValoresDetectados => {
+  const parsedResult = data?.ParsedResults?.[0];
+
+  if (!parsedResult) {
+    throw new Error("NoDetected");
+  }
+
+  const rawText = String(parsedResult?.ParsedText ?? "");
+
+  console.log("TEXTO OCR COMPLETO:", rawText);
+
+  const candidatosOverlay = extraerCandidatosDesdeOverlay(parsedResult);
+  console.log("CANDIDATOS OVERLAY:", candidatosOverlay);
+
+  const trioOverlay = seleccionarMejorTrio(candidatosOverlay);
+
+  if (trioOverlay) {
+    return {
+      ...trioOverlay,
+      rawText,
+    };
+  }
+
+  const candidatosTexto = extraerCandidatosDesdeTexto(rawText);
+  console.log("CANDIDATOS TEXTO:", candidatosTexto);
+
+  const trioTexto = seleccionarMejorTrio(candidatosTexto);
+
+  if (trioTexto) {
+    return {
+      ...trioTexto,
+      rawText,
+    };
+  }
+
+  const trioPegado = detectarPorDigitosPegados(rawText);
+
+  if (trioPegado) {
+    return {
+      ...trioPegado,
+      rawText,
+    };
+  }
+
+  throw new Error(
+    `No se pudieron identificar 3 valores médicos válidos.\n\nOCR leyó:\n"${rawText}"`,
+  );
+};
+
 export default function RegistroPresionManualScreen() {
   const [sistolica, setSistolica] = useState("");
   const [diastolica, setDiastolica] = useState("");
@@ -28,15 +382,13 @@ export default function RegistroPresionManualScreen() {
   const [procesandoFoto, setProcesandoFoto] = useState(false);
 
   const [mostrarCamara, setMostrarCamara] = useState(false);
-  const [imagenRecortada, setImagenRecortada] = useState<{
-    uri: string;
-    base64: string;
-  } | null>(null);
+  const [imagenRecortada, setImagenRecortada] = useState<ImagenOCR | null>(
+    null,
+  );
 
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<any>(null);
 
-  const navigation = useNavigation<any>();
   const { session } = useAuth();
 
   const mostrarSelectorFechaYHora = () => {
@@ -67,6 +419,172 @@ export default function RegistroPresionManualScreen() {
     });
   };
 
+  const prepararImagenParaOCR = async (
+    uri: string,
+    width?: number,
+    height?: number,
+    usarRecorteCentral = false,
+  ): Promise<ImagenOCR> => {
+    const acciones: any[] = [];
+
+    if (usarRecorteCentral && width && height) {
+      /*
+        Este recorte debe coincidir con el marco verde.
+        Antes tu recorte era muy angosto y muy alto.
+        Eso podía cortar números o meter partes innecesarias.
+      */
+      const cropWidth = Math.round(width * 0.52);
+      const cropHeight = Math.round(height * 0.62);
+      const originX = Math.round((width - cropWidth) / 2);
+      const originY = Math.round((height - cropHeight) / 2);
+
+      acciones.push({
+        crop: {
+          originX,
+          originY,
+          width: cropWidth,
+          height: cropHeight,
+        },
+      });
+
+      acciones.push({
+        resize: {
+          width: 1200,
+        },
+      });
+    } else {
+      acciones.push({
+        resize: {
+          width: 1600,
+        },
+      });
+    }
+
+    const manipResult = await ImageManipulator.manipulateAsync(uri, acciones, {
+      compress: 0.95,
+      base64: true,
+      format: ImageManipulator.SaveFormat.JPEG,
+    });
+
+    if (!manipResult.base64) {
+      throw new Error("No se pudo generar la imagen en base64.");
+    }
+
+    return {
+      uri: manipResult.uri,
+      base64: manipResult.base64,
+      width: manipResult.width,
+      height: manipResult.height,
+    };
+  };
+
+  const crearVarianteParaOCR = async (
+    imagen: ImagenOCR,
+    tipo: "digitos" | "lcd" | "original",
+  ): Promise<ImagenOCR> => {
+    if (tipo === "original") {
+      return imagen;
+    }
+
+    const width = imagen.width;
+    const height = imagen.height;
+
+    let crop;
+
+    if (tipo === "digitos") {
+      /*
+      Esta variante intenta dejar solamente los números grandes.
+      Quita casi todo el texto de la derecha: SYS, DIA, PUL, mmHg.
+    */
+      crop = {
+        originX: Math.round(width * 0.18),
+        originY: Math.round(height * 0.02),
+        width: Math.round(width * 0.56),
+        height: Math.round(height * 0.92),
+      };
+    } else {
+      /*
+      Esta variante deja toda la pantalla LCD,
+      pero elimina la columna derecha de textos.
+    */
+      crop = {
+        originX: 0,
+        originY: 0,
+        width: Math.round(width * 0.76),
+        height,
+      };
+    }
+
+    const manipResult = await ImageManipulator.manipulateAsync(
+      imagen.uri,
+      [
+        {
+          crop,
+        },
+        {
+          resize: {
+            width: 1600,
+          },
+        },
+      ],
+      {
+        compress: 1,
+        base64: true,
+        format: ImageManipulator.SaveFormat.JPEG,
+      },
+    );
+
+    if (!manipResult.base64) {
+      throw new Error("No se pudo preparar la variante para OCR.");
+    }
+
+    return {
+      uri: manipResult.uri,
+      base64: manipResult.base64,
+      width: manipResult.width,
+      height: manipResult.height,
+    };
+  };
+  /*
+  const llamarOCR = async (imagen: ImagenOCR, signal: AbortSignal) => {
+    const formData = new FormData();
+
+    formData.append("base64Image", `data:image/jpeg;base64,${imagen.base64}`);
+
+    formData.append("language", "eng");
+    formData.append("isOverlayRequired", "true");
+    formData.append("scale", "true");
+    formData.append("isTable", "false");
+    formData.append("detectOrientation", "true");
+    formData.append("OCREngine", "2");
+
+    const response = await fetch(OCR_URL, {
+      method: "POST",
+      headers: {
+        apikey: OCR_API_KEY,
+      },
+      body: formData,
+      signal,
+    });
+
+    if (!response.ok) {
+      throw new Error("BadResponse");
+    }
+
+    const data = await response.json();
+
+    if (
+      data.IsErroredOnProcessing ||
+      !data.ParsedResults ||
+      data.ParsedResults.length === 0
+    ) {
+      throw new Error("NoDetected");
+    }
+
+    return data;
+  };
+  */
+
   const abrirCamara = async () => {
     if (!permission?.granted) {
       const { status } = await requestPermission();
@@ -78,12 +596,62 @@ export default function RegistroPresionManualScreen() {
         return;
       }
     }
+
     setMostrarCamara(true);
     setImagenRecortada(null);
   };
 
+  const seleccionarImagenGaleria = async () => {
+    try {
+      const { status } =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+      if (status !== "granted") {
+        Alert.alert(
+          "Permiso denegado",
+          "Se requiere acceso a la galería para seleccionar una imagen.",
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [3, 4],
+        quality: 1,
+        base64: false,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        return;
+      }
+
+      const asset = result.assets[0];
+
+      setProcesandoFoto(true);
+
+      const imagenPreparada = await prepararImagenParaOCR(
+        asset.uri,
+        asset.width,
+        asset.height,
+        false,
+      );
+
+      setMostrarCamara(false);
+      setImagenRecortada(imagenPreparada);
+    } catch (error) {
+      Alert.alert(
+        "Error",
+        "Ocurrió un problema al seleccionar o preparar la imagen.",
+      );
+    } finally {
+      setProcesandoFoto(false);
+    }
+  };
+
   const capturarYRecortar = async () => {
     if (!cameraRef.current) return;
+
     setProcesandoFoto(true);
 
     try {
@@ -92,29 +660,14 @@ export default function RegistroPresionManualScreen() {
         quality: 1,
       });
 
-      const cropWidth = photo.width * 0.35;
-      const cropHeight = photo.height * 0.85;
-      const originX = (photo.width - cropWidth) / 2;
-      const originY = (photo.height - cropHeight) / 2;
-
-      const manipResult = await ImageManipulator.manipulateAsync(
+      const imagenPreparada = await prepararImagenParaOCR(
         photo.uri,
-        [{ crop: { originX, originY, width: cropWidth, height: cropHeight } }],
-        {
-          compress: 0.9,
-          base64: true,
-          format: ImageManipulator.SaveFormat.JPEG,
-        },
+        photo.width,
+        photo.height,
+        true,
       );
 
-      if (manipResult.base64) {
-        setImagenRecortada({
-          uri: manipResult.uri,
-          base64: manipResult.base64,
-        });
-      } else {
-        throw new Error("No se pudo generar el recorte.");
-      }
+      setImagenRecortada(imagenPreparada);
     } catch (error) {
       Alert.alert("Error", "Ocurrió un problema al capturar la imagen.");
     } finally {
@@ -122,121 +675,82 @@ export default function RegistroPresionManualScreen() {
     }
   };
 
+  const aplicarValoresDetectados = (valores: ValoresDetectados) => {
+    Alert.alert(
+      "Valores detectados",
+      `Sistólica: ${valores.sistolica}\nDiastólica: ${valores.diastolica}\nPulso: ${valores.pulso}\n\nRevisa que coincidan con la foto antes de guardar.`,
+      [
+        {
+          text: "Reintentar",
+          style: "cancel",
+        },
+        {
+          text: "Usar datos",
+          onPress: () => {
+            setSistolica(valores.sistolica.toString());
+            setDiastolica(valores.diastolica.toString());
+            setPulso(valores.pulso.toString());
+
+            setMostrarCamara(false);
+            setImagenRecortada(null);
+          },
+        },
+      ],
+      { cancelable: false },
+    );
+  };
+
+  const llamarOpenCV = async (imagen: ImagenOCR) => {
+    const response = await fetch(OPENCV_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        imageBase64: imagen.base64,
+      }),
+    });
+
+    const data = await response.json();
+
+    console.log("RESPUESTA OPENCV:", data);
+
+    if (!response.ok || !data.ok) {
+      throw new Error(
+        data?.attempts
+          ? `No se detectaron valores válidos.\n\nIntentos:\n${JSON.stringify(
+              data.attempts,
+              null,
+              2,
+            )}`
+          : data?.message || "No se pudo leer la imagen.",
+      );
+    }
+
+    return data;
+  };
+
   const procesarImagenConfirmada = async () => {
     if (!imagenRecortada?.base64) return;
+
     setProcesandoFoto(true);
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000);
-
-    const OCR_API_KEY = "K82959862488957";
-    const OCR_URL = "https://api.ocr.space/parse/image";
-
     try {
-      const formData = new FormData();
-      formData.append(
-        "base64Image",
-        "data:image/jpeg;base64,${imagenRecortada.base64}",
-      );
-      formData.append("language", "eng");
-      formData.append("isOverlayRequired", "false");
-      formData.append("scale", "true");
-      formData.append("isTable", "false");
-      formData.append("OCREngine", "1");
+      const resultado = await llamarOpenCV(imagenRecortada);
 
-      const response = await fetch(OCR_URL, {
-        method: "POST",
-        headers: { apikey: OCR_API_KEY },
-        body: formData,
-        signal: controller.signal,
+      aplicarValoresDetectados({
+        sistolica: resultado.sistolica,
+        diastolica: resultado.diastolica,
+        pulso: resultado.pulso,
+        rawText: "Lectura realizada con OpenCV",
       });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) throw new Error("BadResponse");
-
-      const data = await response.json();
-
-      if (
-        data.IsErroredOnProcessing ||
-        !data.ParsedResults ||
-        data.ParsedResults.length === 0
-      ) {
-        throw new Error("NoDetected");
-      }
-
-      const rawText = data.ParsedResults[0].ParsedText as string;
-      const textoLimpio = rawText.replace(/[^\d\s\n]/g, " ").trim();
-      const arrayNumerosBrutos = textoLimpio.split(/\s+/).filter(Boolean);
-
-      let valoresMedicosValidos = arrayNumerosBrutos
-        .map((numStr) => parseInt(numStr, 10))
-        .filter((num) => num >= 30 && num <= 300);
-      if (valoresMedicosValidos.length < 2) {
-        const digitosPuros = rawText.replace(/\D/g, "");
-        if (digitosPuros.length >= 6 && digitosPuros.length <= 8) {
-          if (digitosPuros.length === 7) {
-            valoresMedicosValidos = [
-              parseInt(digitosPuros.slice(0, 3), 10),
-              parseInt(digitosPuros.slice(3, 5), 10),
-              parseInt(digitosPuros.slice(5), 10),
-            ];
-          } else if (digitosPuros.length === 6) {
-            valoresMedicosValidos = [
-              parseInt(digitosPuros.slice(0, 2), 10),
-              parseInt(digitosPuros.slice(2, 4), 10),
-              parseInt(digitosPuros.slice(4), 10),
-            ];
-          } else if (digitosPuros.length === 8) {
-            valoresMedicosValidos = [
-              parseInt(digitosPuros.slice(0, 3), 10),
-              parseInt(digitosPuros.slice(3, 6), 10),
-              parseInt(digitosPuros.slice(6), 10),
-            ];
-          } else if (digitosPuros.length === 5) {
-            valoresMedicosValidos = [
-              parseInt(digitosPuros.slice(0, 3), 10),
-              parseInt(digitosPuros.slice(3, 5), 10),
-            ];
-          }
-        }
-      }
-
-      if (valoresMedicosValidos.length >= 2) {
-        setSistolica(valoresMedicosValidos[0].toString());
-        setDiastolica(valoresMedicosValidos[1].toString());
-
-        if (valoresMedicosValidos.length >= 3) {
-          setPulso(valoresMedicosValidos[2].toString());
-        }
-
-        Alert.alert(
-          "Extracción exitosa",
-          "Revisa que los datos en los campos coincidan exactamente con tu foto.",
-        );
-        setMostrarCamara(false);
-        setImagenRecortada(null);
-      } else {
-        throw new Error(
-          `La IA no pudo descifrar los dígitos con claridad.\n\nIntentó leer:\n"${rawText}"\n\nPrueba tomar la foto evitando los reflejos en la pantalla.`,
-        );
-      }
     } catch (error: any) {
-      if (error.name === "AbortError") {
-        Alert.alert(
-          "Tiempo agotado",
-          "La IA tardó demasiado en procesar la foto por problemas de red.",
-        );
-      } else {
-        Alert.alert(
-          "Lectura fallida",
-          error.message !== "NoDetected" && error.message !== "BadResponse"
-            ? error.message
-            : "No se pudieron aislar los números con claridad.",
-        );
-      }
+      Alert.alert(
+        "Lectura fallida",
+        error?.message ||
+          "No se pudieron detectar los valores. Intenta tomar la foto más cerca, centrando solo la pantalla del baumanómetro.",
+      );
     } finally {
-      clearTimeout(timeoutId);
       setProcesandoFoto(false);
     }
   };
@@ -267,6 +781,7 @@ export default function RegistroPresionManualScreen() {
       Alert.alert("Datos inválidos", "Ingresa valores numéricos válidos.");
       return;
     }
+
     if (sistolicaNum < 60 || sistolicaNum > 300) {
       Alert.alert(
         "Valor irreal",
@@ -274,6 +789,7 @@ export default function RegistroPresionManualScreen() {
       );
       return;
     }
+
     if (diastolicaNum < 40 || diastolicaNum > 200) {
       Alert.alert(
         "Valor irreal",
@@ -281,6 +797,7 @@ export default function RegistroPresionManualScreen() {
       );
       return;
     }
+
     if (diastolicaNum >= sistolicaNum) {
       Alert.alert(
         "Datos inválidos",
@@ -288,6 +805,7 @@ export default function RegistroPresionManualScreen() {
       );
       return;
     }
+
     if (pulsoNum < 30 || pulsoNum > 250) {
       Alert.alert("Valor irreal", "El pulso ingresado está fuera de rango.");
       return;
@@ -325,13 +843,14 @@ export default function RegistroPresionManualScreen() {
     }
   };
 
-  if (mostrarCamara && imagenRecortada) {
+  if (imagenRecortada) {
     return (
       <View style={styles.previewContainer}>
         <Text style={styles.previewTitle}>Verifica tu foto</Text>
+
         <Text style={styles.previewSubtitle}>
-          ¿Los números se ven claros y grandes? Si hay mucho brillo o salieron
-          borrosos, vuelve a intentarlo.
+          Asegúrate de que los 3 números principales se vean claros, grandes y
+          sin reflejos. Si se ven borrosos, vuelve a intentarlo.
         </Text>
 
         <Image
@@ -357,7 +876,7 @@ export default function RegistroPresionManualScreen() {
             {procesandoFoto ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.btnText}>Procesar IA</Text>
+              <Text style={styles.btnText}>Procesar imagen</Text>
             )}
           </TouchableOpacity>
         </View>
@@ -371,6 +890,7 @@ export default function RegistroPresionManualScreen() {
         <CameraView style={styles.camera} ref={cameraRef} facing="back">
           <View style={styles.overlay}>
             <View style={styles.unfocusedContainer} />
+
             <View style={styles.middleContainer}>
               <View style={styles.unfocusedContainer} />
 
@@ -382,7 +902,7 @@ export default function RegistroPresionManualScreen() {
 
                 <Text style={styles.instruccionScanner}>ALINEAR</Text>
                 <Text style={styles.instruccionScannerInfo}>
-                  Solo números. Evita el brillo.
+                  Coloca solo los 3 números grandes.
                 </Text>
               </View>
 
@@ -393,7 +913,10 @@ export default function RegistroPresionManualScreen() {
               <View style={styles.cameraActions}>
                 <TouchableOpacity
                   style={styles.cancelarCamaraBtn}
-                  onPress={() => setMostrarCamara(false)}
+                  onPress={() => {
+                    setMostrarCamara(false);
+                    setImagenRecortada(null);
+                  }}
                 >
                   <Text style={styles.cancelarCamaraText}>Volver</Text>
                 </TouchableOpacity>
@@ -409,6 +932,7 @@ export default function RegistroPresionManualScreen() {
                     <View style={styles.captureBtnInner} />
                   )}
                 </TouchableOpacity>
+
                 <View style={{ width: 80 }} />
               </View>
             </View>
@@ -424,18 +948,33 @@ export default function RegistroPresionManualScreen() {
       contentContainerStyle={styles.container}
     >
       <View style={styles.fotoSeccion}>
-        <Text style={styles.fotoTitulo}>Escaneo Guiado de Pantalla</Text>
+        <Text style={styles.fotoTitulo}>Escaneo de Baumanómetro</Text>
+
         <Text style={styles.fotoDescripcion}>
-          Abre la cámara y alinea los 3 números grandes dentro del marco verde.
-          Luego presiona el botón para procesar la imagen con Inteligencia
-          Artificial.
+          Puedes tomar una foto directa al baumanómetro o subir una imagen desde
+          la galería. La app intentará detectar sistólica, diastólica y pulso.
         </Text>
+
         <TouchableOpacity
           style={styles.botonFoto}
           onPress={abrirCamara}
-          disabled={loading}
+          disabled={loading || procesandoFoto}
         >
           <Text style={styles.botonFotoTexto}>Abrir Escáner</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.botonGaleria}
+          onPress={seleccionarImagenGaleria}
+          disabled={loading || procesandoFoto}
+        >
+          {procesandoFoto ? (
+            <ActivityIndicator color="#007AFF" />
+          ) : (
+            <Text style={styles.botonGaleriaTexto}>
+              Subir imagen desde galería
+            </Text>
+          )}
         </TouchableOpacity>
       </View>
 
@@ -483,6 +1022,7 @@ export default function RegistroPresionManualScreen() {
 
       <View style={styles.fechaContainer}>
         <Text style={styles.label}>Fecha y hora</Text>
+
         <TouchableOpacity
           onPress={mostrarSelectorFechaYHora}
           disabled={loading}
@@ -509,6 +1049,7 @@ export default function RegistroPresionManualScreen() {
               style={{ width: 100, height: 100, marginBottom: 20 }}
               resizeMode="contain"
             />
+
             <Text style={{ fontSize: 18, fontWeight: "bold" }}>
               ¡Medición guardada!
             </Text>
@@ -521,6 +1062,7 @@ export default function RegistroPresionManualScreen() {
 
 const styles = StyleSheet.create({
   container: { padding: 20, flexGrow: 1, backgroundColor: "#fff" },
+
   fotoSeccion: {
     backgroundColor: "#f8f9fa",
     padding: 16,
@@ -529,35 +1071,77 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#e9ecef",
   },
+
   fotoTitulo: {
     fontSize: 16,
     fontWeight: "bold",
     marginBottom: 8,
     color: "#343a40",
   },
+
   fotoDescripcion: {
     fontSize: 13,
     color: "#6c757d",
     marginBottom: 16,
     lineHeight: 18,
   },
+
   botonFoto: {
     backgroundColor: "#28a745",
     padding: 12,
     borderRadius: 10,
     alignItems: "center",
   },
-  botonFotoTexto: { color: "#fff", fontSize: 15, fontWeight: "600" },
-  divisor: { height: 1, backgroundColor: "#dee2e6", marginBottom: 20 },
+
+  botonFotoTexto: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+
+  botonGaleria: {
+    marginTop: 10,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#007AFF",
+    padding: 12,
+    borderRadius: 10,
+    alignItems: "center",
+  },
+
+  botonGaleriaTexto: {
+    color: "#007AFF",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+
+  divisor: {
+    height: 1,
+    backgroundColor: "#dee2e6",
+    marginBottom: 20,
+  },
+
   seccionTitulo: {
     fontSize: 18,
     fontWeight: "bold",
     marginBottom: 16,
     color: "#212529",
   },
-  row: { flexDirection: "row", justifyContent: "space-between" },
-  inputBox: { flex: 1 },
-  label: { fontWeight: "600", marginBottom: 6 },
+
+  row: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+
+  inputBox: {
+    flex: 1,
+  },
+
+  label: {
+    fontWeight: "600",
+    marginBottom: 6,
+  },
+
   input: {
     borderWidth: 1,
     borderColor: "#ccc",
@@ -565,21 +1149,37 @@ const styles = StyleSheet.create({
     padding: 12,
     marginBottom: 16,
   },
-  fechaContainer: { marginBottom: 20 },
-  fecha: { color: "#007AFF", fontSize: 16, marginTop: 8 },
+
+  fechaContainer: {
+    marginBottom: 20,
+  },
+
+  fecha: {
+    color: "#007AFF",
+    fontSize: 16,
+    marginTop: 8,
+  },
+
   boton: {
     backgroundColor: "#007AFF",
     padding: 14,
     borderRadius: 12,
     alignItems: "center",
   },
-  botonTexto: { color: "#fff", fontSize: 16, fontWeight: "600" },
+
+  botonTexto: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+
   modalContainer: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.3)",
     justifyContent: "center",
     alignItems: "center",
   },
+
   modalContent: {
     backgroundColor: "#fff",
     padding: 24,
@@ -595,12 +1195,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
+
   previewTitle: {
     color: "#4CAF50",
     fontSize: 26,
     fontWeight: "bold",
     marginBottom: 10,
   },
+
   previewSubtitle: {
     color: "#ccc",
     fontSize: 14,
@@ -608,6 +1210,7 @@ const styles = StyleSheet.create({
     marginBottom: 30,
     lineHeight: 20,
   },
+
   previewImage: {
     width: "100%",
     height: 350,
@@ -617,11 +1220,13 @@ const styles = StyleSheet.create({
     marginBottom: 40,
     backgroundColor: "#222",
   },
+
   previewActions: {
     flexDirection: "row",
     justifyContent: "space-between",
     width: "100%",
   },
+
   btnReintentar: {
     backgroundColor: "#dc3545",
     padding: 15,
@@ -630,6 +1235,7 @@ const styles = StyleSheet.create({
     marginRight: 10,
     alignItems: "center",
   },
+
   btnExtraer: {
     backgroundColor: "#28a745",
     padding: 15,
@@ -638,19 +1244,43 @@ const styles = StyleSheet.create({
     marginLeft: 10,
     alignItems: "center",
   },
-  btnText: { color: "#fff", fontSize: 16, fontWeight: "bold" },
 
-  cameraScreen: { flex: 1, backgroundColor: "black" },
-  camera: { flex: 1 },
-  overlay: { flex: 1 },
-  unfocusedContainer: { flex: 1, backgroundColor: "rgba(0,0,0,0.85)" },
+  btnText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "bold",
+  },
+
+  cameraScreen: {
+    flex: 1,
+    backgroundColor: "black",
+  },
+
+  camera: {
+    flex: 1,
+  },
+
+  overlay: {
+    flex: 1,
+  },
+
+  unfocusedContainer: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.85)",
+  },
+
   unfocusedBottomContainer: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.85)",
     justifyContent: "center",
     alignItems: "center",
   },
-  middleContainer: { flexDirection: "row", height: "55%" },
+
+  middleContainer: {
+    flexDirection: "row",
+    height: "55%",
+  },
+
   focusedBox: {
     width: "45%",
     borderColor: "#4CAF50",
@@ -659,6 +1289,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
+
   instruccionScanner: {
     color: "#4CAF50",
     fontSize: 20,
@@ -667,24 +1298,34 @@ const styles = StyleSheet.create({
     textAlign: "center",
     letterSpacing: 1,
   },
+
   instruccionScannerInfo: {
     color: "#fff",
     fontSize: 12,
     opacity: 0.7,
     marginTop: 5,
+    textAlign: "center",
   },
+
   cameraActions: {
     flexDirection: "row",
     justifyContent: "space-around",
     alignItems: "center",
     width: "100%",
   },
+
   cancelarCamaraBtn: {
     padding: 15,
     backgroundColor: "rgba(255,255,255,0.2)",
     borderRadius: 10,
   },
-  cancelarCamaraText: { color: "white", fontSize: 16, fontWeight: "bold" },
+
+  cancelarCamaraText: {
+    color: "white",
+    fontSize: 16,
+    fontWeight: "bold",
+  },
+
   captureBtn: {
     width: 70,
     height: 70,
@@ -693,6 +1334,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
+
   captureBtnInner: {
     width: 60,
     height: 60,
@@ -701,6 +1343,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: "#000",
   },
+
   cornerTopLeft: {
     position: "absolute",
     top: 0,
@@ -711,6 +1354,7 @@ const styles = StyleSheet.create({
     borderLeftWidth: 5,
     borderColor: "#4CAF50",
   },
+
   cornerTopRight: {
     position: "absolute",
     top: 0,
@@ -721,6 +1365,7 @@ const styles = StyleSheet.create({
     borderRightWidth: 5,
     borderColor: "#4CAF50",
   },
+
   cornerBottomLeft: {
     position: "absolute",
     bottom: 0,
@@ -731,6 +1376,7 @@ const styles = StyleSheet.create({
     borderLeftWidth: 5,
     borderColor: "#4CAF50",
   },
+
   cornerBottomRight: {
     position: "absolute",
     bottom: 0,
