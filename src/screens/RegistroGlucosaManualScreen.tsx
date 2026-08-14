@@ -27,7 +27,7 @@ type ImagenGlucosa = {
   base64: string;
 };
 
-const GLUCOSA_API_URL = "http://192.168.1.67:5000/leer-glucosa";
+const GLUCOSA_API_URL = "https://hipergia-api.onrender.com/leer-glucosa";
 
 export default function RegistroGlucosaManualScreen() {
   const [ayunas, setAyunas] = useState("");

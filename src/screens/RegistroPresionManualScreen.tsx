@@ -41,7 +41,7 @@ type ValoresDetectados = {
   rawText: string;
 };
 
-const OPENCV_API_URL = "http://192.168.1.67:5000/leer-presion";
+const OPENCV_API_URL = "https://hipergia-api.onrender.com/leer-presion";
 
 const esNumeroValidoGeneral = (num: number) => {
   return Number.isFinite(num) && num >= 30 && num <= 300;
@@ -449,19 +449,19 @@ export default function RegistroPresionManualScreen() {
 
       acciones.push({
         resize: {
-          width: 1200,
+          width: 800,
         },
       });
     } else {
       acciones.push({
         resize: {
-          width: 1600,
+          width: 1000,
         },
       });
     }
 
     const manipResult = await ImageManipulator.manipulateAsync(uri, acciones, {
-      compress: 0.95,
+      compress: 0.7,
       base64: true,
       format: ImageManipulator.SaveFormat.JPEG,
     });
@@ -705,29 +705,40 @@ export default function RegistroPresionManualScreen() {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "ngrok-skip-browser-warning": "true", // <--- EL TRUCO MAGICO QUE SALTA LA PANTALLA
       },
       body: JSON.stringify({
         imageBase64: imagen.base64,
       }),
     });
 
-    const data = await response.json();
+    // Validamos si la respuesta es realmente JSON antes de parsearla
+    const textResponse = await response.text();
 
-    console.log("RESPUESTA OPENCV:", data);
+    try {
+      const data = JSON.parse(textResponse);
+      console.log("RESPUESTA OPENCV:", data);
 
-    if (!response.ok || !data.ok) {
+      if (!response.ok || !data.ok) {
+        throw new Error(
+          data?.attempts
+            ? `No se detectaron valores válidos.\n\nIntentos:\n${JSON.stringify(
+                data.attempts,
+                null,
+                2,
+              )}`
+            : data?.message || "No se pudo leer la imagen.",
+        );
+      }
+
+      return data;
+    } catch (e) {
+      // Si vuelve a fallar, este console.log te dirá EXACTAMENTE qué página HTML te está devolviendo
+      console.log("HTML RECIBIDO EN VEZ DE JSON:", textResponse);
       throw new Error(
-        data?.attempts
-          ? `No se detectaron valores válidos.\n\nIntentos:\n${JSON.stringify(
-              data.attempts,
-              null,
-              2,
-            )}`
-          : data?.message || "No se pudo leer la imagen.",
+        "El servidor no devolvió datos válidos. Revisa la terminal de Python o asegúrate de que la URL termine en /leer-presion",
       );
     }
-
-    return data;
   };
 
   const procesarImagenConfirmada = async () => {
