@@ -1,5 +1,5 @@
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
-import React, { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -29,6 +29,61 @@ function fmtHoyAyer(iso: string) {
   if (same(d, hoy)) return `Hoy ${hh}:${mm}`;
   if (same(d, ayer)) return `Ayer ${hh}:${mm}`;
   return d.toLocaleString();
+}
+
+// Función que analiza el historial para definir el riesgo
+function calcularRiesgoDinamico(mediciones: MedicionGlucosa[]) {
+  if (!mediciones || mediciones.length === 0) {
+    return { nivel: "Bajo", fechaLabel: "Sin mediciones previas" };
+  }
+
+  // 1. Tomamos la fecha de la medición más reciente
+  const ultimaFecha = new Date(mediciones[0].measured_at);
+  const hoy = new Date();
+  const diasDif = Math.floor(
+    (hoy.getTime() - ultimaFecha.getTime()) / (1000 * 3600 * 24),
+  );
+  const fechaLabel =
+    diasDif === 0
+      ? "Último análisis: Hoy"
+      : `Último análisis hace ${diasDif} días`;
+
+  // 2. Tomamos hasta las últimas 3 mediciones para promediar (historial)
+  const ultimas3 = mediciones.slice(0, 3);
+  let sumAyuno = 0,
+    countAyuno = 0;
+  let sumPost = 0,
+    countPost = 0;
+
+  ultimas3.forEach((m) => {
+    if (m.ayunas) {
+      sumAyuno += m.ayunas;
+      countAyuno++;
+    }
+    if (m.postprandial) {
+      sumPost += m.postprandial;
+      countPost++;
+    }
+  });
+
+  const avgAyuno = countAyuno > 0 ? sumAyuno / countAyuno : 0;
+  const avgPost = countPost > 0 ? sumPost / countPost : 0;
+
+  // 3. Evaluamos según estándares médicos:
+  // Prediabetes: Ayuno 100-125 | Postprandial 140-199 (Moderado)
+  // Diabetes: Ayuno >= 126 | Postprandial >= 200 (Alto)
+  let nivel: "Bajo" | "Moderado" | "Alto" = "Bajo";
+
+  if (avgAyuno >= 126 || avgPost >= 200) {
+    nivel = "Alto";
+  } else if (
+    (avgAyuno >= 100 && avgAyuno <= 125) ||
+    (avgPost >= 140 && avgPost <= 199)
+  ) {
+    nivel = "Moderado";
+  }
+
+  return { nivel, fechaLabel };
 }
 
 export type MedicionGlucosa = {
@@ -229,6 +284,17 @@ export default function GlucosaScreen() {
     return true;
   };
 
+  // Calculamos el riesgo con los datos que ya tenemos cargados
+  const analisis = calcularRiesgoDinamico(lecturas);
+
+  // Definimos colores dinámicos para la tarjeta según el riesgo calculado
+  const colorRiesgo =
+    analisis.nivel === "Bajo"
+      ? "#16A34A"
+      : analisis.nivel === "Moderado"
+        ? "#D97706"
+        : "#DC2626";
+
   return (
     <ScrollView
       style={styles.screen}
@@ -295,16 +361,25 @@ export default function GlucosaScreen() {
         </View>
       </View>
 
-      {/* Tarjeta de Riesgo Glucosa */}
+      {/* Tarjeta de Riesgo Glucosa Dinámica */}
       <View style={styles.cardRiesgo}>
         <Text style={styles.titleRiesgo}>Riesgo Actual</Text>
-        <Text style={styles.nivelRiesgo}>Moderado</Text>
-        <Text style={styles.subRiesgo}>Riesgo de Diabetes</Text>
-        <Text style={styles.fechaRiesgo}>Último análisis hace 2 días</Text>
+        <Text style={[styles.nivelRiesgo, { color: colorRiesgo }]}>
+          {analisis.nivel}
+        </Text>
+        <Text style={[styles.subRiesgo, { color: colorRiesgo }]}>
+          Riesgo de Diabetes
+        </Text>
+        <Text style={styles.fechaRiesgo}>{analisis.fechaLabel}</Text>
         <TouchableOpacity
-          onPress={() => navigation.navigate("AnalisisRiesgoGlucosa")}
+          onPress={() =>
+            navigation.navigate("AnalisisRiesgoGlucosa", {
+              nivelRiesgoParam: analisis.nivel,
+              fechaParam: analisis.fechaLabel,
+            })
+          }
         >
-          <Text style={styles.linkAnalisis}>Ver análisis</Text>
+          <Text style={styles.linkAnalisis}>Ver análisis detallado</Text>
         </TouchableOpacity>
       </View>
 
@@ -450,10 +525,9 @@ const styles = StyleSheet.create({
   nivelRiesgo: {
     fontSize: 32,
     fontWeight: "bold",
-    color: "#D97706",
     marginVertical: 8,
   },
-  subRiesgo: { fontSize: 16, color: "#D97706", fontWeight: "600" },
+  subRiesgo: { fontSize: 16, fontWeight: "600" },
   fechaRiesgo: {
     fontSize: 12,
     color: "#999",

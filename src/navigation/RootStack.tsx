@@ -1,5 +1,5 @@
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
-import React from "react";
+import { LogBox } from "react-native";
 
 import LoginScreen from "../screens/LoginScreen";
 import MiPerfilScreen from "../screens/MiPerfilScreen";
@@ -17,7 +17,7 @@ export type RootStackParamList = {
   Onboarding: undefined;
   MiPerfilScreen: undefined;
 };
-
+LogBox.ignoreLogs(["Require cycle:"]);
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function RootStack() {

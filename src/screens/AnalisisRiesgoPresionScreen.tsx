@@ -1,9 +1,54 @@
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useRoute } from "@react-navigation/native";
 import React from "react";
 import { Image, ScrollView, StyleSheet, Text, View } from "react-native";
 
 export default function AnalisisRiesgoPresionScreen() {
   const navigation = useNavigation<any>();
+  const route = useRoute<any>();
+
+  // Leemos los datos enviados desde PresionArterialScreen
+  const nivelRiesgo = route.params?.nivelRiesgoParam || "Bajo";
+  const fechaRiesgo = route.params?.fechaParam || "Último análisis hace 2 días";
+
+  // Variables dinámicas para Factores y Recomendaciones
+  let factores: { label: string; val: string; color: string }[] = [];
+  let recomendaciones: string[] = [];
+  let mensajeExito = "";
+
+  if (nivelRiesgo === "Bajo") {
+    mensajeExito = "¡Sigue así!";
+    factores = [
+      { label: "IMC", val: "Normal", color: "#16A34A" },
+      { label: "Antecedentes familiares", val: "Alto", color: "#DC2626" },
+      { label: "Consumo de sal", val: "Normal", color: "#16A34A" },
+      { label: "Actividad física", val: "Alta", color: "#16A34A" },
+    ];
+    recomendaciones = [
+      "Tus hábitos actuales ayudan a mantener un bajo riesgo de hipertensión",
+      "Continúa realizando actividad física, manteniendo una alimentación equilibrada y monitoreando tu salud periódicamente.",
+    ];
+  } else {
+    // Para riesgo Moderado y Alto
+    factores = [
+      { label: "IMC", val: "Alto", color: "#DC2626" },
+      { label: "Antecedentes familiares", val: "Alto", color: "#DC2626" },
+      { label: "Consumo de sal", val: "Moderado", color: "#D97706" },
+      { label: "Actividad física", val: "Moderado", color: "#D97706" },
+    ];
+    recomendaciones = [
+      "Reducir consumo de sal",
+      "Incrementar actividad física",
+      "Mantener un peso saludable",
+      "Control periódico de presión arterial",
+    ];
+  }
+
+  // Estilos dinámicos para la tarjeta principal
+  const getColorRiesgo = () => {
+    if (nivelRiesgo === "Bajo") return "#16A34A"; // Verde
+    if (nivelRiesgo === "Moderado") return "#D97706"; // Naranja
+    return "#DC2626"; // Rojo
+  };
 
   return (
     <ScrollView
@@ -15,9 +60,13 @@ export default function AnalisisRiesgoPresionScreen() {
 
       {/* Tarjeta Principal de Riesgo */}
       <View style={styles.card}>
-        <Text style={styles.riesgoNivel}>Alto</Text>
-        <Text style={styles.riesgoLabel}>Riesgo de Hipertensión</Text>
-        <Text style={styles.riesgoFecha}>Último análisis hace 2 días</Text>
+        <Text style={[styles.riesgoNivel, { color: getColorRiesgo() }]}>
+          {nivelRiesgo}
+        </Text>
+        <Text style={[styles.riesgoLabel, { color: getColorRiesgo() }]}>
+          Riesgo de Hipertensión
+        </Text>
+        <Text style={styles.riesgoFecha}>{fechaRiesgo}</Text>
       </View>
 
       {/* Factores Principales */}
@@ -25,43 +74,41 @@ export default function AnalisisRiesgoPresionScreen() {
         <Text style={styles.sectionTitle}>Factores Principales</Text>
         <Text style={styles.subTitle}>Qué influye en tu resultado</Text>
 
-        <View style={styles.factorRow}>
-          <Text>IMC</Text>
-          <Text style={styles.alto}>Alto</Text>
-        </View>
-        <View style={styles.factorRow}>
-          <Text>Antecedentes familiares</Text>
-          <Text style={styles.alto}>Alto</Text>
-        </View>
-        <View style={styles.factorRow}>
-          <Text>Consumo de sal</Text>
-          <Text style={styles.moderado}>Moderado</Text>
-        </View>
-        <View style={styles.factorRow}>
-          <Text>Actividad física</Text>
-          <Text style={styles.moderado}>Moderado</Text>
-        </View>
+        {factores.map((item, i) => (
+          <View key={i} style={styles.factorRow}>
+            <Text>{item.label}</Text>
+            <Text style={{ color: item.color, fontWeight: "bold" }}>
+              {item.val}
+            </Text>
+          </View>
+        ))}
       </View>
 
       {/* Recomendaciones */}
       <View style={styles.card}>
         <View style={styles.headerRecomendacion}>
-          <Text style={styles.sectionTitle}>Recomendaciones</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.sectionTitle}>Recomendaciones</Text>
+            <Text style={styles.subTitle}>En base a tus resultados</Text>
+          </View>
           <Image
             source={require("../assets/imagenes/lista.png")}
             style={styles.icono}
+            resizeMode="contain"
           />
         </View>
-        <Text style={styles.subTitle}>En base a tus resultados</Text>
-        {[
-          "Reducir consumo de sal",
-          "Incrementar actividad física",
-          "Mantener un peso saludable",
-          "Control periódico de presión",
-        ].map((rec, i) => (
-          <Text key={i} style={styles.checkItem}>
-            ✓ {rec}
-          </Text>
+
+        {/* Mensaje de éxito exclusivo para Riesgo Bajo */}
+        {mensajeExito ? (
+          <Text style={styles.mensajeExito}>{mensajeExito}</Text>
+        ) : null}
+
+        {/* Lista de recomendaciones dinámica */}
+        {recomendaciones.map((rec, i) => (
+          <View key={i} style={styles.itemContainer}>
+            <Text style={styles.checkIcon}>✓</Text>
+            <Text style={styles.checkItem}>{rec}</Text>
+          </View>
         ))}
       </View>
 
@@ -94,7 +141,7 @@ const styles = StyleSheet.create({
   },
   contentContainer: {
     padding: 20,
-    paddingBottom: 100, // Esto soluciona el scroll cortado al final
+    paddingBottom: 100,
   },
   headerTitle: {
     fontSize: 22,
@@ -112,12 +159,10 @@ const styles = StyleSheet.create({
   riesgoNivel: {
     fontSize: 40,
     fontWeight: "bold",
-    color: "#DC2626",
     textAlign: "center",
   },
   riesgoLabel: {
     fontSize: 18,
-    color: "#DC2626",
     textAlign: "center",
     fontWeight: "600",
   },
@@ -128,20 +173,44 @@ const styles = StyleSheet.create({
     marginTop: 5,
   },
   sectionTitle: { fontSize: 18, fontWeight: "bold" },
-  subTitle: { fontSize: 12, color: "#999", marginBottom: 15 },
+  subTitle: { fontSize: 12, color: "#999", marginBottom: 15, marginTop: 4 },
   factorRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "#fafafa",
   },
-  alto: { color: "#DC2626", fontWeight: "bold" },
-  moderado: { color: "#D97706", fontWeight: "bold" },
   headerRecomendacion: {
     flexDirection: "row",
     justifyContent: "space-between",
+    alignItems: "flex-start",
   },
-  icono: { width: 40, height: 40 },
-  checkItem: { marginVertical: 6, fontSize: 14 },
+  icono: { width: 50, height: 50 },
+  mensajeExito: {
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#16A34A",
+    textAlign: "center",
+    marginBottom: 15,
+  },
+  itemContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginVertical: 8,
+    paddingRight: 10,
+  },
+  checkIcon: {
+    color: "#16A34A",
+    fontSize: 18,
+    fontWeight: "bold",
+    marginRight: 10,
+  },
+  checkItem: {
+    fontSize: 14,
+    color: "#333",
+    flex: 1,
+  },
   historialRow: {
     flexDirection: "row",
     justifyContent: "space-between",

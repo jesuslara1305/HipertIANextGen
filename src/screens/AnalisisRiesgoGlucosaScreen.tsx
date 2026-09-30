@@ -1,15 +1,56 @@
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useRoute } from "@react-navigation/native";
 import React from "react";
-import {
-    Image,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View
-} from "react-native";
+import { Image, ScrollView, StyleSheet, Text, View } from "react-native";
 
 export default function AnalisisRiesgoGlucosaScreen() {
   const navigation = useNavigation<any>();
+  const route = useRoute<any>();
+
+  // Leemos los datos enviados desde la GlucosaScreen
+  const nivelRiesgo = route.params?.nivelRiesgoParam || "Bajo";
+  const fechaRiesgo = route.params?.fechaParam || "Último análisis: Hoy";
+
+  // Variables dinámicas para Factores y Recomendaciones
+  let factores: { label: string; val: string; color: string }[] = [];
+  let recomendaciones: string[] = [];
+  let mensajeExito = "";
+
+  if (nivelRiesgo === "Bajo") {
+    mensajeExito = "¡Sigue así!";
+    // Factores para riesgo Bajo
+    factores = [
+      { label: "IMC", val: "Normal", color: "#16A34A" },
+      { label: "Antecedentes familiares", val: "Alto", color: "#DC2626" },
+      { label: "Consumo de sal", val: "Normal", color: "#16A34A" },
+      { label: "Actividad física", val: "Alta", color: "#16A34A" },
+    ];
+    recomendaciones = [
+      "Tus hábitos actuales ayudan a mantener un bajo riesgo de diabetes",
+      "Continúa realizando actividad física, manteniendo una alimentación equilibrada y monitoreando tu salud periódicamente.",
+    ];
+  } else {
+    // Factores para riesgo Moderado y Alto
+    factores = [
+      { label: "Glucosa en ayunas", val: "Alto", color: "#DC2626" },
+      { label: "Antecedentes familiares", val: "Alto", color: "#DC2626" },
+      { label: "IMC", val: "Moderado", color: "#D97706" },
+      { label: "Actividad física", val: "Moderado", color: "#D97706" },
+    ];
+    // Recomendaciones enfocadas a DIABETES
+    recomendaciones = [
+      "Reducir consumo de azúcares y carbohidratos",
+      "Incrementar actividad física",
+      "Mantener un peso saludable",
+      "Control periódico de glucosa en sangre",
+    ];
+  }
+
+  // Colores dinámicos según el nivel
+  const getColorRiesgo = () => {
+    if (nivelRiesgo === "Bajo") return "#16A34A"; // Verde
+    if (nivelRiesgo === "Moderado") return "#D97706"; // Naranja
+    return "#DC2626"; // Rojo
+  };
 
   return (
     <ScrollView
@@ -21,23 +62,22 @@ export default function AnalisisRiesgoGlucosaScreen() {
 
       {/* Tarjeta Principal */}
       <View style={styles.card}>
-        <View style={styles.circleNivel}>
-          <Text style={styles.riesgoNivel}>Bajo</Text>
+        <View style={[styles.circleNivel, { borderColor: getColorRiesgo() }]}>
+          <Text style={[styles.riesgoNivel, { color: getColorRiesgo() }]}>
+            {nivelRiesgo}
+          </Text>
         </View>
-        <Text style={styles.riesgoLabel}>Riesgo de Hipertensión</Text>
-        <Text style={styles.riesgoFecha}>Último análisis hace 2 días</Text>
+        <Text style={[styles.riesgoLabel, { color: getColorRiesgo() }]}>
+          Riesgo de Diabetes
+        </Text>
+        <Text style={styles.riesgoFecha}>{fechaRiesgo}</Text>
       </View>
 
       {/* Factores Principales */}
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Factores Principales</Text>
         <Text style={styles.subTitle}>Qué influye en tu resultado</Text>
-        {[
-          { label: "IMC", val: "Normal", color: "#16A34A" },
-          { label: "Antecedentes familiares", val: "Alto", color: "#DC2626" },
-          { label: "Consumo de sal", val: "Normal", color: "#16A34A" },
-          { label: "Actividad física", val: "Alta", color: "#16A34A" },
-        ].map((item, i) => (
+        {factores.map((item, i) => (
           <View key={i} style={styles.factorRow}>
             <Text>{item.label}</Text>
             <Text style={{ color: item.color, fontWeight: "bold" }}>
@@ -50,21 +90,29 @@ export default function AnalisisRiesgoGlucosaScreen() {
       {/* Recomendaciones */}
       <View style={styles.card}>
         <View style={styles.headerRecomendacion}>
-          <Text style={styles.sectionTitle}>Recomendaciones</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.sectionTitle}>Recomendaciones</Text>
+            <Text style={styles.subTitle}>En base a tus resultados</Text>
+          </View>
           <Image
-            source={require("../assets/imagenes/corazon.png")}
+            source={require("../assets/imagenes/riesgo.png")}
             style={styles.icono}
+            resizeMode="contain"
           />
         </View>
-        <Text style={styles.exitoText}>¡Sigue así!</Text>
-        <Text style={styles.checkItem}>
-          ✓ Tus hábitos actuales ayudan a mantener un bajo riesgo de
-          hipertensión.
-        </Text>
-        <Text style={styles.checkItem}>
-          ✓ Continúa realizando actividad física, manteniendo una alimentación
-          equilibrada y monitoreando tu salud periódicamente.
-        </Text>
+
+        {/* Mensaje de éxito exclusivo para Riesgo Bajo */}
+        {mensajeExito ? (
+          <Text style={styles.exitoText}>{mensajeExito}</Text>
+        ) : null}
+
+        {/* Lista de recomendaciones dinámica */}
+        {recomendaciones.map((rec, i) => (
+          <View key={i} style={styles.itemContainer}>
+            <Text style={styles.checkIcon}>✓</Text>
+            <Text style={styles.checkItem}>{rec}</Text>
+          </View>
+        ))}
       </View>
 
       {/* Historial */}
@@ -110,16 +158,14 @@ const styles = StyleSheet.create({
     height: 100,
     borderRadius: 50,
     borderWidth: 4,
-    borderColor: "#16A34A",
     alignItems: "center",
     justifyContent: "center",
     alignSelf: "center",
     marginBottom: 10,
   },
-  riesgoNivel: { fontSize: 28, fontWeight: "bold", color: "#16A34A" },
+  riesgoNivel: { fontSize: 24, fontWeight: "bold" },
   riesgoLabel: {
     fontSize: 18,
-    color: "#16A34A",
     textAlign: "center",
     fontWeight: "600",
   },
@@ -130,25 +176,44 @@ const styles = StyleSheet.create({
     marginTop: 5,
   },
   sectionTitle: { fontSize: 18, fontWeight: "bold" },
-  subTitle: { fontSize: 12, color: "#999", marginBottom: 15 },
+  subTitle: { fontSize: 12, color: "#999", marginBottom: 15, marginTop: 4 },
   factorRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "#fafafa", // Un borde muy sutil para separar factores
   },
   headerRecomendacion: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
+    alignItems: "flex-start",
   },
   icono: { width: 50, height: 50 },
   exitoText: {
     color: "#16A34A",
     fontWeight: "bold",
     textAlign: "center",
+    fontSize: 18,
     marginVertical: 10,
   },
-  checkItem: { marginVertical: 6, fontSize: 14, color: "#444" },
+  itemContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginVertical: 8,
+    paddingRight: 10,
+  },
+  checkIcon: {
+    color: "#16A34A",
+    fontSize: 18,
+    fontWeight: "bold",
+    marginRight: 10,
+  },
+  checkItem: {
+    fontSize: 14,
+    color: "#333",
+    flex: 1,
+  },
   historialRow: {
     flexDirection: "row",
     justifyContent: "space-between",

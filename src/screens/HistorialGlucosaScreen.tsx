@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -10,6 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+
 import { getCategoriaGlucosa, MedicionGlucosa } from "./GlucosaScreen";
 
 type Punto = { label: string; a: number; p: number };

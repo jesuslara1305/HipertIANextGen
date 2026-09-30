@@ -32,6 +32,51 @@ function fmtHoyAyer(iso: string) {
   return d.toLocaleString();
 }
 
+// Función que analiza el historial para definir el riesgo de Presión Arterial
+function calcularRiesgoPresionDinamico(mediciones: MedicionPresion[]) {
+  if (!mediciones || mediciones.length === 0) {
+    return { nivel: "Bajo", fechaLabel: "Sin mediciones previas" };
+  }
+
+  // 1. Tomamos la fecha de la medición más reciente
+  const ultimaFecha = new Date(mediciones[0].measured_at);
+  const hoy = new Date();
+  const diasDif = Math.floor(
+    (hoy.getTime() - ultimaFecha.getTime()) / (1000 * 3600 * 24),
+  );
+  const fechaLabel =
+    diasDif === 0
+      ? "Último análisis: Hoy"
+      : `Último análisis hace ${diasDif} días`;
+
+  // 2. Tomamos hasta las últimas 3 mediciones para promediar (historial)
+  const ultimas3 = mediciones.slice(0, 3);
+  let sumSys = 0,
+    sumDia = 0;
+
+  ultimas3.forEach((m) => {
+    sumSys += m.systolica;
+    sumDia += m.diastolica;
+  });
+
+  const avgSys = sumSys / ultimas3.length;
+  const avgDia = sumDia / ultimas3.length;
+
+  // 3. Evaluamos según estándares médicos:
+  // Normal (<120 / <80) -> Bajo
+  // Elevada/Moderada (>=120 / >=80) -> Moderado
+  // Alta (>=140 / >=90) -> Alto
+  let nivel: "Bajo" | "Moderado" | "Alto" = "Bajo";
+
+  if (avgSys >= 140 || avgDia >= 90) {
+    nivel = "Alto";
+  } else if (avgSys >= 120 || avgDia >= 80) {
+    nivel = "Moderado";
+  }
+
+  return { nivel, fechaLabel };
+}
+
 export type MedicionPresion = {
   id: string;
   systolica: number;
@@ -196,6 +241,17 @@ export default function PresionArterialScreen() {
     return true;
   };
 
+  // Calculamos el riesgo con los datos reales
+  const analisis = calcularRiesgoPresionDinamico(mediciones);
+
+  // Definimos colores dinámicos para la tarjeta de riesgo
+  const colorRiesgo =
+    analisis.nivel === "Bajo"
+      ? "#16A34A"
+      : analisis.nivel === "Moderado"
+        ? "#D97706"
+        : "#DC2626";
+
   return (
     <ScrollView
       style={styles.screen}
@@ -263,17 +319,25 @@ export default function PresionArterialScreen() {
         </View>
       </TouchableOpacity>
 
+      {/* Tarjeta de Riesgo Presión Dinámica */}
       <View style={styles.cardRiesgo}>
         <Text style={styles.titleRiesgo}>Riesgo Actual</Text>
-        <Text style={styles.nivelRiesgo}>Alto</Text>
-        <Text style={styles.subRiesgo}>Riesgo de Hipertensión</Text>
-        <Text style={styles.fechaRiesgo}>Último análisis hace 2 días</Text>
+        <Text style={[styles.nivelRiesgo, { color: colorRiesgo }]}>
+          {analisis.nivel}
+        </Text>
+        <Text style={[styles.subRiesgo, { color: colorRiesgo }]}>
+          Riesgo de Hipertensión
+        </Text>
+        <Text style={styles.fechaRiesgo}>{analisis.fechaLabel}</Text>
         <TouchableOpacity
           onPress={() => {
-            navigation.navigate("AnalisisRiesgo");
+            navigation.navigate("AnalisisRiesgo", {
+              nivelRiesgoParam: analisis.nivel,
+              fechaParam: analisis.fechaLabel,
+            });
           }}
         >
-          <Text style={styles.linkAnalisis}>Ver análisis</Text>
+          <Text style={styles.linkAnalisis}>Ver análisis detallado</Text>
         </TouchableOpacity>
       </View>
 
@@ -332,10 +396,9 @@ const styles = StyleSheet.create({
   nivelRiesgo: {
     fontSize: 32,
     fontWeight: "bold",
-    color: "#DC2626",
     marginVertical: 8,
   },
-  subRiesgo: { fontSize: 16, color: "#DC2626", fontWeight: "600" },
+  subRiesgo: { fontSize: 16, fontWeight: "600" },
   fechaRiesgo: {
     fontSize: 12,
     color: "#999",
